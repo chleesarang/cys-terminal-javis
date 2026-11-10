@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- 보안: 스크립트는 이 앱 파일만, 네트워크 전송은 자기 주소만(외부 서버로 데이터가 나갈 길 자체를 차단) -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; media-src 'self' blob:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'self'; manifest-src 'self'">
+<meta name="referrer" content="no-referrer">
+<meta name="theme-color" content="#1f3a5f">
+<meta name="description" content="교회 재정 · 헌금 · 결산 자동화 — 서버 없이 기기 안에 암호화 저장">
+<title>청지기 장부</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="stylesheet" href="styles.css">
+<script type="module" src="app.js"></script>
+</head>
+<body>
+<div id="app"><div class="gate"><p class="muted">불러오는 중…</p></div></div>
+<div id="printArea"></div>
+<noscript>이 앱은 자바스크립트가 필요합니다.</noscript>
+</body>
+</html>

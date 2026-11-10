@@ -50,13 +50,14 @@ export function financeReportHtml(doc, s, { title = '재정 보고서', showWeek
   if (showWeekly && s.weekly.weeks.length > 1 && s.weekly.weeks.length <= 6) {
     weekly = `<h2>주일별 헌금</h2><table class="t small"><thead><tr><th>주일</th>${s.weekly.cols.map((c) => `<th>${esc(c.name)}</th>`).join('')}<th>계</th></tr></thead><tbody>${s.weekly.weeks.map((w) => `<tr><td>${esc(w.week.slice(5).replace('-', '/'))}</td>${s.weekly.cols.map((c) => `<td class="n">${w.cells[c.id] ? won(w.cells[c.id]) : ''}</td>`).join('')}<td class="n b">${won(w.total)}</td></tr>`).join('')}</tbody></table>`;
   }
+  const monthly = s.monthly.length > 1 ? `<h2>월별 흐름</h2><table class="t small"><thead><tr><th>월</th><th>수입</th><th>지출</th><th>차액</th></tr></thead><tbody>${s.monthly.map((m) => `<tr><td>${esc(m.month)}</td><td class="n">${won(m.in)}</td><td class="n">${won(m.out)}</td><td class="n ${m.net < 0 ? 'bad' : ''}">${won(m.net)}</td></tr>`).join('')}</tbody></table>` : '';
   const outList = s.txs.filter((t) => t.kind === 'out');
   const accName = (id) => doc.accounts.find((a) => a.id === id)?.name || '미분류';
   const detail = outList.length && outList.length <= 60 ? `<h2>지출 명세</h2><table class="t small"><thead><tr><th>일자</th><th>항목</th><th>내용</th><th>금액</th><th>증빙</th></tr></thead><tbody>${outList.map((t) => `<tr><td>${esc(t.date.slice(5).replace('-', '/'))}</td><td>${esc(accName(t.accountId))}</td><td>${esc(t.payee ? t.payee + ' ' : '')}${esc(t.memo)}</td><td class="n">${won(t.amount)}</td><td>${t.attachments?.length ? '○' : t.noReceiptReason ? '사유' : '✕'}</td></tr>`).join('')}</tbody></table>` : '';
   const bank = s.bank.length ? `<h2>통장 잔액 대조</h2><table class="t small"><thead><tr><th>일자</th><th>회계</th><th>은행</th><th>통장</th><th>장부</th><th>차이</th></tr></thead><tbody>${s.bank.map((b) => `<tr><td>${esc(b.date)}</td><td>${esc(b.fund)}</td><td>${esc(b.bank)}</td><td class="n">${won(b.amount)}</td><td class="n">${won(b.book)}</td><td class="n ${b.diff ? 'bad' : ''}">${won(b.diff)}</td></tr>`).join('')}</tbody></table>` : '';
   const flags = showFlags && s.flags.length ? `<h2>감사 점검 사항 (${s.flags.length})</h2><ul class="flags">${s.flags.slice(0, 40).map((f) => `<li class="${f.level}">${esc(f.msg)}</li>`).join('')}</ul>` : '';
   return `<article class="doc">${head(doc, title, `${fmtDate(s.from)} ~ ${fmtDate(s.to)} · ${s.fy}년도 예산(${esc(s.budgetStatus)}) · 작성 ${fmtDate(todayLocal())}`)}
-<h2>요약</h2>${fundTable}<h2>수입</h2>${accTable('in')}<h2>지출</h2>${accTable('out')}${weekly}${detail}${bank}${flags}
+<h2>요약</h2>${fundTable}<h2>수입</h2>${accTable('in')}<h2>지출</h2>${accTable('out')}${weekly}${monthly}${detail}${bank}${flags}
 ${sign(['회계', '재정부장', '감사', '담임목사'])}</article>`;
 }
 
@@ -71,7 +72,7 @@ ${sign(['담당', '회계', '재정부장', '담임목사'])}
 <tr><th>지급처</th><td>${esc(t.payee || '')}</td><th>결제</th><td>${esc(t.method || '')}</td></tr>
 <tr><th>내용</th><td colspan="3">${esc(t.memo)}</td></tr>
 <tr><th>증빙</th><td colspan="3">${images.length ? `영수증 ${images.length}매 첨부` : t.noReceiptReason ? '증빙 없음 — 사유: ' + esc(t.noReceiptReason) : '증빙 없음'}</td></tr>
-<tr><th>영수인</th><td colspan="3" style="height:2.2em"></td></tr></table>
+<tr><th>영수인</th><td colspan="3" class="tall"></td></tr></table>
 ${images.map((src) => `<div class="voucher-img"><img src="${esc(src)}" alt="영수증"></div>`).join('')}</article>`;
 }
 
