@@ -3,8 +3,8 @@
 //   I|YYYYMMDD|코드|이름|금액          헌금
 //   O|YYYYMMDD|코드|금액|거래처 메모    지출
 //   T|합계                             검산용 합계
-import { classifyExpense, parseKoreanAmount } from './parse.js';
-import { isYmd } from './util.js';
+import { classifyExpense, parseMoney } from './parse.js';
+import { isYmd, currencyInfo } from './util.js';
 
 function codeTable(doc) {
   const act = doc.accounts.filter((a) => a.active !== false);
@@ -22,7 +22,7 @@ export function setupPrompt(doc) {
     '헌금: I|YYYYMMDD|코드|이름|금액',
     '지출: O|YYYYMMDD|코드|금액|거래처 메모',
     '마지막 줄: T|금액 합계',
-    '규칙: 금액은 쉼표·원 없는 정수. 날짜를 모르면 ?. 이름을 모르면 무명. 부부 공동은 이름&이름. 교인번호가 보이면 #번호. 코드가 애매하면 ?. 영수증은 합계(결제금액) 한 줄, 메모는 품목 요약 10자 이내.',
+    (currencyInfo().code === 'USD' ? '규칙: 금액은 달러, $·쉼표 없이 숫자(센트는 소수점 2자리, 예 23.50).' : '규칙: 금액은 쉼표·원 없는 정수.') + ' 날짜를 모르면 ?. 이름을 모르면 무명. 부부 공동은 이름&이름. 교인번호가 보이면 #번호. 코드가 애매하면 ?. 영수증은 합계(결제금액) 한 줄, 메모는 품목 요약 10자 이내.',
     `수입코드: ${ins}`,
     `지출코드: ${outs}`,
   ].join('\n');
@@ -53,7 +53,7 @@ export function parseBridge(text, doc, { date } = {}) {
     if (d.length === 4 && date) { const v = `${date.slice(0, 4)}-${d.slice(0, 2)}-${d.slice(2)}`; if (isYmd(v)) return v; }
     return date || null;
   };
-  const amt = (s) => { const v = parseKoreanAmount(String(s || '').trim()); return v && v > 0 ? v : null; };
+  const amt = (s) => { const v = parseMoney(String(s || '').trim()); return v && v > 0 ? v : null; };
   for (const [i, line] of lines.entries()) {
     const f = line.split('|').map((x) => x.trim());
     const kind = f[0].toUpperCase();

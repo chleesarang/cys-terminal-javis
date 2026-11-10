@@ -1,7 +1,8 @@
 // 관리 화면 — 보고서 · 교인 · 기부금영수증 · 예산 · AI 도우미 · 설정
 import { S, h, raw, $, $$, toast, modal, askReason, confirmBox, commit, printHtml, download, shareOrDownload, copyText, today, hydrateThumbs, storeAttachment, revokeAll } from './ui.js';
-import { won, fmtDate, maskRrn, todayLocal, b64encode, b64decode, esc as esc2, sha256Bytes as sha256Hex2 } from './core/util.js';
-import { parseTable, parseKoreanAmount } from './core/parse.js';
+import { won, money, major, inputAmt, currencyInfo, fmtDate, maskRrn, todayLocal, b64encode, b64decode, esc as esc2, sha256Bytes as sha256Hex2 } from './core/util.js';
+import { regionOf, REGIONS } from './core/region.js';
+import { parseTable, parseMoney } from './core/parse.js';
 import { liveTxs, upsertMember, nextMemberNo, upsertAccount, setBudget, setOpening, lockPeriod, lockedThrough, verifyAudit, fyOf, fyRange, funds, addBankCheck, mergeDocs, addTx } from './core/ledger.js';
 import { summarize, periodRange, donorTotals, issueReceipt, receiptYearTotal, openingOf } from './core/reports.js';
 import { financeReportHtml, voucherHtml, receiptHtml } from './core/render.js';
@@ -61,14 +62,14 @@ export function vReport() {
 
 function txRows(list) {
   return [['일자', '구분', '관', '항', '회계', '헌금자', '성명2', '지급처', '메모', '금액', '방법', '증빙수', '증빙없음사유', '입력', 'ID'],
-    ...list.map((t) => { const a = accOf(t.accountId); return [t.date, t.kind === 'in' ? '수입' : '지출', a?.gwan || '미분류', a?.name || '미분류', a?.fund || '일반회계', t.donor || '', t.donor2 || '', t.payee || '', t.memo || '', t.amount, t.method || '', t.attachments?.length || 0, t.noReceiptReason || '', t.source || '', t.id]; })];
+    ...list.map((t) => { const a = accOf(t.accountId); return [t.date, t.kind === 'in' ? '수입' : '지출', a?.gwan || '미분류', a?.name || '미분류', a?.fund || '일반회계', t.donor || '', t.donor2 || '', t.payee || '', t.memo || '', major(t.amount), t.method || '', t.attachments?.length || 0, t.noReceiptReason || '', t.source || '', t.id]; })];
 }
 function reportSheets(s) {
   return [
     { name: '거래내역', rows: txRows(s.txs) },
-    { name: '항목별', rows: [['구분', '관', '항', '회계', '이번기간', '연예산', '연누계', '집행률%'], ...s.rows.filter((r) => r.period || r.budget || r.ytd).map((r) => [r.kind === 'in' ? '수입' : '지출', r.gwan, r.name, r.fund, r.period, r.budget, r.ytd, r.rate ?? ''])] },
-    { name: '회계별', rows: [['회계', '전기이월', '수입', '지출', '차기이월'], ...Object.entries(s.byFund).map(([f, v]) => [f, v.opening, v.in, v.out, v.closing])] },
-    { name: '주일별헌금', rows: [['주일', ...s.weekly.cols.map((c) => c.name), '계'], ...s.weekly.weeks.map((w) => [w.week, ...s.weekly.cols.map((c) => w.cells[c.id] || 0), w.total])] },
+    { name: '항목별', rows: [['구분', '관', '항', '회계', '이번기간', '연예산', '연누계', '집행률%'], ...s.rows.filter((r) => r.period || r.budget || r.ytd).map((r) => [r.kind === 'in' ? '수입' : '지출', r.gwan, r.name, r.fund, major(r.period), major(r.budget), major(r.ytd), r.rate ?? ''])] },
+    { name: '회계별', rows: [['회계', '전기이월', '수입', '지출', '차기이월'], ...Object.entries(s.byFund).map(([f, v]) => [f, major(v.opening), major(v.in), major(v.out), major(v.closing)])] },
+    { name: '주일별헌금', rows: [['주일', ...s.weekly.cols.map((c) => c.name), '계'], ...s.weekly.weeks.map((w) => [w.week, ...s.weekly.cols.map((c) => major(w.cells[c.id] || 0)), major(w.total)])] },
   ];
 }
 const stamp = () => todayLocal();
@@ -84,7 +85,7 @@ async function auditZip() {
       const bytes = await getFileBytes(S.key, a.id);
       if (!bytes) continue;
       const ext = (a.name.split('.').pop() || 'bin').toLowerCase().replace(/[^a-z0-9]/g, '');
-      const name = `증빙/${t.date}_${t.amount}원_${accName(t.accountId).replace(/[\\/:*?"<>|·\s]/g, '')}_${t.id.slice(0, 8)}_${a.id.slice(0, 4)}.${ext}`;
+      const name = `증빙/${t.date}_${inputAmt(t.amount)}${currencyInfo().code === 'USD' ? 'USD' : '원'}_${accName(t.accountId).replace(/[\\/:*?"<>|·\s]/g, '')}_${t.id.slice(0, 8)}_${a.id.slice(0, 4)}.${ext}`;
       files.push({ name, data: bytes });
       if (a.mime.startsWith('image/')) imgs.push(name);
     }
@@ -117,25 +118,26 @@ export function vMembers() {
     <button class="btn" data-act="memTemplate">양식 내려받기</button>
     <button class="btn" data-act="memExport">명부 엑셀</button>
   </div>
-  <p class="small muted">주민등록번호는 <b>기부금영수증을 원하는 분만</b> 입력하세요. 기기 안에서 암호화되고 화면에는 가려져 보입니다. 중지된 교인은 지우지 말고 상태를 ‘중지’로 두세요(번호 재사용 방지).</p></div>
-  <div class="card"><h3>${S.doc.members.length}명 (사용 ${S.doc.members.filter((m) => m.status !== '중지').length} · 주정 합계 ${won(S.doc.members.filter((m) => m.status !== '중지').reduce((s, m) => s + (m.weekly || 0), 0))}원)</h3>
-  <div class="tbl-wrap"><table class="list"><thead><tr><th>번호</th><th>이름</th><th class="n">주정(매주)</th><th>연락처</th><th>주민번호</th><th>가족</th><th>상태</th><th></th></tr></thead><tbody>
-  ${list.map((m) => h`<tr><td>${m.no}</td><td>${m.name}</td><td class="n">${m.weekly ? won(m.weekly) : ''}</td><td>${m.phone || ''}</td><td>${m.rrn ? maskRrn(m.rrn) : ''}</td><td>${m.familyId || ''}</td><td>${m.status || '사용'}</td><td><button class="btn sm" data-act="memEdit" data-id="${m.id}">✎</button></td></tr>`)}
+  <p class="small muted">${regionOf(S.doc).personalId ? h`주민등록번호는 <b>기부금영수증을 원하는 분만</b> 입력하세요.` : h`미국 헌금 영수증에는 SSN이 필요 없으므로 수집하지 않습니다. <b>주소</b>만 정확히 넣어 주세요.`} 기기 안에서 암호화되고 화면에는 가려져 보입니다. 중지된 교인은 지우지 말고 상태를 ‘중지’로 두세요(번호 재사용 방지).</p></div>
+  <div class="card"><h3>${S.doc.members.length}명 (사용 ${S.doc.members.filter((m) => m.status !== '중지').length} · 주정 합계 ${money(S.doc.members.filter((m) => m.status !== '중지').reduce((s, m) => s + (m.weekly || 0), 0))})</h3>
+  <div class="tbl-wrap"><table class="list"><thead><tr><th>번호</th><th>이름</th><th class="n">주정(매주)</th><th>연락처</th>${regionOf(S.doc).personalId ? h`<th>주민번호</th>` : ''}<th>가족</th><th>상태</th><th></th></tr></thead><tbody>
+  ${list.map((m) => h`<tr><td>${m.no}</td><td>${m.name}</td><td class="n">${m.weekly ? won(m.weekly) : ''}</td><td>${m.phone || ''}</td>${regionOf(S.doc).personalId ? h`<td>${m.rrn ? maskRrn(m.rrn) : ''}</td>` : ''}<td>${m.familyId || ''}</td><td>${m.status || '사용'}</td><td><button class="btn sm" data-act="memEdit" data-id="${m.id}">✎</button></td></tr>`)}
   </tbody></table></div></div>`;
 }
 async function memEdit(id) {
   const m = S.doc.members.find((x) => x.id === id) || { no: nextMemberNo(S.doc), status: '사용' };
   const r = await modal({
     title: id ? `교인 ${m.no} 수정` : '교인 추가',
-    body: h`<div class="row"><label class="f"><span>번호</span><input type="number" name="no" value="${m.no}"></label><label class="f grow"><span>이름</span><input type="text" name="name" value="${m.name || ''}"></label><label class="f"><span>주정(매주 금액)</span><input type="text" inputmode="numeric" name="weekly" value="${m.weekly || ''}"></label></div>
+    body: h`<div class="row"><label class="f"><span>번호</span><input type="number" name="no" value="${m.no}"></label><label class="f grow"><span>이름</span><input type="text" name="name" value="${m.name || ''}"></label><label class="f"><span>주정(매주 금액)</span><input type="text" inputmode="numeric" name="weekly" value="${m.weekly ? inputAmt(m.weekly) : ''}"></label></div>
     <div class="row"><label class="f grow"><span>연락처</span><input type="tel" name="phone" value="${m.phone || ''}"></label><label class="f grow"><span>가족 ID (부부·가족 묶음)</span><input type="text" name="familyId" value="${m.familyId || ''}" placeholder="예: F01"></label><label class="f"><span>상태</span><select name="status"><option ${m.status !== '중지' ? 'selected' : ''}>사용</option><option ${m.status === '중지' ? 'selected' : ''}>중지</option></select></label></div>
     <label class="f"><span>주소 (기부금영수증용)</span><input type="text" name="address" value="${m.address || ''}"></label>
-    <label class="f"><span>주민등록번호 (영수증 희망자만 · 암호화) ${m.rrn ? '— 현재 ' + maskRrn(m.rrn) + ', 바꿀 때만 입력' : ''}</span><input type="text" name="rrn" inputmode="numeric" autocomplete="off" placeholder="000000-0000000"></label>
+    ${regionOf(S.doc).personalId ? h`<label class="f"><span>주민등록번호 (영수증 희망자만 · 암호화) ${m.rrn ? '— 현재 ' + maskRrn(m.rrn) + ', 바꿀 때만 입력' : ''}</span><input type="text" name="rrn" inputmode="numeric" autocomplete="off" placeholder="000000-0000000"></label>` : ''}
     <label class="f"><span>메모</span><input type="text" name="note" value="${m.note || ''}"></label>`,
-    actions: [{ key: 'cancel', label: '취소' }, { key: 'ok', label: '저장', cls: 'primary', validate: (v) => (!v.name.trim() ? '이름을 입력하세요' : v.rrn && v.rrn.replace(/\D/g, '').length !== 13 ? '주민등록번호는 13자리' : '') }],
+    actions: [{ key: 'cancel', label: '취소' }, { key: 'ok', label: '저장', cls: 'primary', validate: (v) => (!v.name.trim() ? '이름을 입력하세요' : v.rrn && String(v.rrn).replace(/\D/g, '').length !== 13 ? '주민등록번호는 13자리' : '') }],
   });
   if (r.key !== 'ok') return;
   const v = { ...r.values, id: id || undefined };
+  v.weekly = v.weekly ? parseMoney(v.weekly) ?? 0 : 0;
   if (!v.rrn) delete v.rrn;
   upsertMember(S.doc, v);
   await commit(); toast('저장했습니다'); S.render();
@@ -157,7 +159,7 @@ async function memImport() {
   const r1 = await modal({
     title: '교인 여러 명 가져오기', wide: true,
     body: h`<p class="small">엑셀에서 표를 드래그해 복사(Ctrl+C)한 뒤 아래에 붙여넣거나(Ctrl+V), CSV 파일을 고르세요. 첫 줄이 제목이면 자동으로 알아봅니다.</p>
-      <textarea name="text" placeholder="1	김철수	20000	010-0000-0011&#10;2	이영희	15000	010-0000-0012"></textarea>
+      <textarea name="text" placeholder="1	홍길동	20000	010-0000-0011&#10;2	성춘향	15000	010-0000-0012"></textarea>
       <label class="btn sm" style="margin-top:6px">CSV 파일 고르기<input type="file" name="file" accept=".csv,text/csv,text/plain" class="hidden"></label>`,
     actions: [{ key: 'cancel', label: '취소' }, { key: 'ok', label: '다음 ▶', cls: 'primary' }],
   });
@@ -184,6 +186,7 @@ async function memImport() {
     const m = {};
     map.forEach((k, i) => { if (k && r[i] !== undefined && r[i] !== '') m[k] = r[i]; });
     if (r2.values.renumber) delete m.no;
+    if (m.weekly !== undefined) m.weekly = parseMoney(m.weekly) ?? 0;
     if (!m.name) continue;
     const ex = m.no ? S.doc.members.find((x) => x.no === +m.no) : null;
     try { upsertMember(S.doc, { ...m, id: ex && ex.name === m.name ? ex.id : undefined }); ok++; } catch (e) { errs.push(`${ri + 1}행 ${m.name}: ${e.message}`); }
@@ -202,13 +205,15 @@ export function vReceipts() {
   const active = (key) => issued.find((r) => r.donorKey === key && !r.voided);
   const total = receiptYearTotal(S.doc, y);
   const st = S.doc.settings;
-  return h`<h2 class="page">기부금영수증</h2>
+  const R = regionOf(S.doc);
+  return h`<h2 class="page">${R.receiptMenu}</h2>
   <div class="card"><div class="row"><label class="f"><span>귀속 연도 (1~12월)</span><select id="rc-year" data-change="rcYear">${[0, 1, 2, 3].map((k) => new Date().getFullYear() - k).map((v) => h`<option ${v === y ? 'selected' : ''}>${v}</option>`)}</select></label>
   <button class="btn primary" data-act="rcAll">전체 발급·인쇄 (${list.length}명)</button><button class="btn" data-act="rcLedger">발급명세 대장(엑셀)</button></div>
-  ${!st.bizNo || !st.address || !st.rep ? h`<p class="hint">⚠ 설정에서 <b>고유번호·소재지·대표자</b>를 먼저 입력하세요(영수증에 인쇄됨). <a href="#" data-act="nav" data-v="settings">설정</a></p>` : ''}
-  <p class="small muted">일련번호는 연도별로 중복 없이 매겨지고, 재발급하면 이전 번호는 무효 처리되어 대장에 남습니다. 발급명세는 5년 보관 대상입니다. 이자·잡수입 등 헌금이 아닌 항목은 자동 제외됩니다.${total >= 3e8 ? h` <b class="bad">연 발급 합계가 3억 원 이상입니다 — 홈택스 전자기부금영수증 발급 의무 대상인지 확인하세요.</b>` : ''}</p></div>
-  <div class="card"><div class="tbl-wrap"><table class="list"><thead><tr><th>번호</th><th>이름</th><th class="n">${y}년 합계</th><th>주민번호</th><th>발급</th><th></th></tr></thead><tbody>
-  ${list.map((d) => { const a = active(d.key); return h`<tr><td>${d.member?.no || '-'}</td><td>${d.name}</td><td class="n">${won(d.total)}</td><td>${d.member?.rrn ? '✔' : h`<span class="warn small">없음</span>`}</td><td>${a ? h`<span class="badge">${a.serial}</span>` : ''}</td>
+  ${R.code === 'US' ? (!st.address ? h`<p class="hint">⚠ 설정에서 <b>교회 주소</b>(필수)와 EIN(선택)을 입력하세요.</p>` : '') : !st.bizNo || !st.address || !st.rep ? h`<p class="hint">⚠ 설정에서 <b>고유번호·소재지·대표자</b>를 먼저 입력하세요(영수증에 인쇄됨). <a href="#" data-act="nav" data-v="settings">설정</a></p>` : ''}
+  ${R.code === 'US' ? h`<p class="small muted">IRS 기준: 한 번에 $250 이상 헌금한 분은 이 확인서가 있어야 세금 공제를 받을 수 있습니다. 날짜별 헌금 내역과 ‘무형의 종교적 혜택 외 재화·용역 제공 없음’ 문구가 자동으로 들어갑니다. 법정 발송 기한은 없지만 다음 해 1월 31일까지 보내는 것이 관행입니다. 자세한 내용은 <a href="#" data-act="nav" data-v="help">도움말 › 영수증 가이드</a>.</p>` : ''}
+  <p class="small muted">일련번호는 연도별로 중복 없이 매겨지고, 재발급하면 이전 번호는 무효 처리되어 대장에 남습니다. 발급명세는 5년 보관 대상이며, 발급합계표는 다음 해 6월 30일까지 관할 세무서에 냅니다(전자 발급분 제외). 이자·잡수입 등 헌금이 아닌 항목은 자동 제외됩니다.${R.code === 'KR' && total >= 3e8 ? h` <b class="bad">연 발급 합계가 3억 원 이상입니다 — 다음 해 기부분부터 홈택스 전자기부금영수증(1월 10일까지) 의무 대상입니다. 도움말 › 영수증 가이드를 확인하세요.</b>` : ''}</p></div>
+  <div class="card"><div class="tbl-wrap"><table class="list"><thead><tr><th>번호</th><th>이름</th><th class="n">${y}년 합계</th>${R.personalId ? h`<th>주민번호</th>` : h`<th>주소</th>`}<th>발급</th><th></th></tr></thead><tbody>
+  ${list.map((d) => { const a = active(d.key); return h`<tr><td>${d.member?.no || '-'}</td><td>${d.name}</td><td class="n">${money(d.total)}</td><td>${(R.personalId ? d.member?.rrn : d.member?.address) ? '✔' : h`<span class="warn small">없음</span>`}</td><td>${a ? h`<span class="badge">${a.serial}</span>` : ''}</td>
     <td><button class="btn sm" data-act="rcIssue" data-key="${d.key}">${a ? '재발급' : '발급'}·인쇄</button>${a ? h` <button class="btn sm" data-act="rcPrint" data-id="${a.id}">다시 인쇄</button>` : ''}</td></tr>`; })}
   </tbody></table></div>${list.length ? '' : h`<p class="muted">${y}년에 이름이 있는 헌금 기록이 없습니다.</p>`}</div>`;
 }
@@ -232,9 +237,9 @@ export function vBudget() {
   const section = (kind) => {
     const list = d.accounts.filter((a) => a.kind === kind && (a.active !== false || b.items[a.id]));
     const tot = list.reduce((s, a) => s + (b.items[a.id] || 0), 0);
-    return h`<h3>${kind === 'in' ? '수입' : '지출'} 예산 — 합계 ${won(tot)}원</h3><div class="tbl-wrap"><table class="list"><thead><tr><th>관</th><th>항</th><th class="n">작년 예산</th><th class="n">작년 결산</th><th class="n">올해 예산</th><th class="n">증감</th><th class="n">올해 집행</th><th>집행률</th></tr></thead><tbody>
+    return h`<h3>${kind === 'in' ? '수입' : '지출'} 예산 — 합계 ${money(tot)}</h3><div class="tbl-wrap"><table class="list"><thead><tr><th>관</th><th>항</th><th class="n">작년 예산</th><th class="n">작년 결산</th><th class="n">올해 예산</th><th class="n">증감</th><th class="n">올해 집행</th><th>집행률</th></tr></thead><tbody>
     ${list.map((a) => { const bv = b.items[a.id] || 0, av = act[a.id] || 0; return h`<tr><td>${a.gwan}</td><td>${a.name}</td><td class="n">${won(prev[a.id] || 0)}</td><td class="n">${won(pact[a.id] || 0)}</td>
-      <td><input type="text" inputmode="numeric" class="n" data-bud="${a.id}" value="${bv || ''}" ${lockedB ? 'disabled' : ''}></td><td class="n">${won(bv - (prev[a.id] || 0))}</td><td class="n">${won(av)}</td><td>${bv ? h`<progress max="100" value="${Math.min(100, (av / bv) * 100)}"></progress><span class="small">${Math.round((av / bv) * 1000) / 10}%</span>` : ''}</td></tr>`; })}
+      <td><input type="text" inputmode="decimal" class="n" data-bud="${a.id}" value="${bv ? inputAmt(bv) : ''}" ${lockedB ? 'disabled' : ''}></td><td class="n">${won(bv - (prev[a.id] || 0))}</td><td class="n">${won(av)}</td><td>${bv ? h`<progress max="100" value="${Math.min(100, (av / bv) * 100)}"></progress><span class="small">${Math.round((av / bv) * 1000) / 10}%</span>` : ''}</td></tr>`; })}
     </tbody></table></div>`;
   };
   const inT = d.accounts.filter((a) => a.kind === 'in').reduce((s, a) => s + (b.items[a.id] || 0), 0);
@@ -252,14 +257,14 @@ export function vBudget() {
       ${lockedB ? h`<button class="btn" data-act="budUnlock">확정 해제</button>` : h`<button class="btn gold" data-act="budConfirm">확정</button>`}
       <button class="btn" data-act="budPrint">🖨 예산서 인쇄</button>
     </div>
-    <p class="small ${inT + opening - outT === 0 ? 'ok' : 'warn'}">수입 예산 ${won(inT)} + 전기이월 ${won(opening)} − 지출 예산 ${won(outT)} = ${won(inT + opening - outT)}원 ${inT + opening - outT === 0 ? '(균형)' : '(예비비로 맞추면 균형)'}</p>
+    <p class="small ${inT + opening - outT === 0 ? 'ok' : 'warn'}">수입 예산 ${won(inT)} + 전기이월 ${won(opening)} − 지출 예산 ${won(outT)} = ${money(inT + opening - outT)} ${inT + opening - outT === 0 ? '(균형)' : '(예비비로 맞추면 균형)'}</p>
   </div>
   <div class="card">${section('in')}</div><div class="card">${section('out')}</div>
   <div class="card"><h3>전기 이월금 (회계별)</h3><p class="small muted">비워 두면 전년도 장부의 기말 잔액이 자동으로 넘어옵니다. 앱을 처음 쓰는 해에만 통장 잔액 기준으로 입력하세요.</p>
-  <div class="row">${funds(d).map((f) => h`<label class="f"><span>${f} (자동 ${won(openingOf({ ...d, openings: { ...d.openings, [fy]: undefined } }, fy, f))})</span><input type="text" inputmode="numeric" data-open="${f}" value="${d.openings[fy]?.funds?.[f] ?? ''}"></label>`)}</div>
+  <div class="row">${funds(d).map((f) => h`<label class="f"><span>${f} (자동 ${won(openingOf({ ...d, openings: { ...d.openings, [fy]: undefined } }, fy, f))})</span><input type="text" inputmode="numeric" data-open="${f}" value="${inputAmt(d.openings[fy]?.funds?.[f])}"></label>`)}</div>
   <button class="btn" data-act="openSave">이월금 저장</button></div>`;
 }
-function readBudgetInputs() { const items = {}; for (const el of $$('[data-bud]')) items[el.dataset.bud] = parseKoreanAmount(el.value || '0') || 0; return items; }
+function readBudgetInputs() { const items = {}; for (const el of $$('[data-bud]')) items[el.dataset.bud] = parseMoney(el.value || '0') || 0; return items; }
 function budgetHtml(fy) {
   const d = S.doc, b = d.budgets[fy] || { items: {}, status: '없음' };
   const tbl = (kind) => { const l = d.accounts.filter((a) => a.kind === kind && b.items[a.id]); return `<table class="t"><thead><tr><th>관</th><th>항</th><th>예산액</th></tr></thead><tbody>${l.map((a) => `<tr><td>${esc2(a.gwan)}</td><td>${esc2(a.name)}</td><td class="n">${won(b.items[a.id])}</td></tr>`).join('')}<tr class="sum"><td></td><td>합계</td><td class="n">${won(l.reduce((s, a) => s + b.items[a.id], 0))}</td></tr></tbody></table>`; };
@@ -289,10 +294,10 @@ export function vAi() {
   <div class="card"><h3>③ AI 답변 붙여넣기</h3>
     <textarea id="ai-text" placeholder="I|20261108|102|#12|100000&#10;O|20261107|262|23000|이마트 다과&#10;T|123000">${a.text}</textarea>
     <div class="row" style="margin-top:8px"><label class="f"><span>날짜가 ?일 때</span><input type="date" id="ai-date" value="${a.date || today()}"></label><button class="btn primary" data-act="aiParse">확인 ▶</button></div>
-    ${res ? h`${res.errors.length ? h`<ul class="warn">${res.errors.map((e) => h`<li>${e}</li>`)}</ul>` : ''}${res.totalOk ? h`<p class="ok">✔ 합계 검산 일치 (${won(res.sum)}원)</p>` : ''}
+    ${res ? h`${res.errors.length ? h`<ul class="warn">${res.errors.map((e) => h`<li>${e}</li>`)}</ul>` : ''}${res.totalOk ? h`<p class="ok">✔ 합계 검산 일치 (${money(res.sum)})</p>` : ''}
       ${membersDatalist()}
-      ${res.offerings.length ? h`<h3>헌금 ${res.offerings.length}건</h3><div class="tbl-wrap"><table class="list"><thead><tr><th>날짜</th><th>종류</th><th>헌금자</th><th class="n">금액</th><th>방법</th></tr></thead><tbody>${res.offerings.map((it, i) => h`<tr class="ai-in ${it.warnings.length ? 'warnrow' : ''}" data-i="${i}"><td><input type="date" data-f="date" value="${it.date || ''}"></td><td><select data-f="accountId">${accOptions('in', it.accountId)}</select></td><td><input type="text" list="members-dl" data-f="donor" value="${it.donor}${it.donor2 ? ' & ' + it.donor2 : ''}">${it.warnings.length ? h`<div class="small warn">${it.warnings.join(' · ')}</div>` : ''}</td><td><input type="text" data-f="amount" value="${it.amount || ''}"></td><td><select data-f="method">${methodOptions('현금')}</select></td></tr>`)}</tbody></table></div>` : ''}
-      ${res.expenses.length ? h`<h3>지출 ${res.expenses.length}건</h3><div class="tbl-wrap"><table class="list"><thead><tr><th>날짜</th><th>내용</th><th>예산 항목</th><th class="n">금액</th><th>결제</th></tr></thead><tbody>${res.expenses.map((it, i) => h`<tr class="ai-out ${it.warnings.length ? 'warnrow' : ''}" data-i="${i}"><td><input type="date" data-f="date" value="${it.date || ''}"></td><td><input type="text" data-f="memo" value="${it.memo}"></td><td><select data-f="accountId">${accOptions('out', it.accountId, { blank: true })}</select><div class="small muted">${it.reason}</div></td><td><input type="text" data-f="amount" value="${it.amount || ''}"></td><td><select data-f="method">${methodOptions('카드')}</select></td></tr>`)}</tbody></table></div>
+      ${res.offerings.length ? h`<h3>헌금 ${res.offerings.length}건</h3><div class="tbl-wrap"><table class="list"><thead><tr><th>날짜</th><th>종류</th><th>헌금자</th><th class="n">금액</th><th>방법</th></tr></thead><tbody>${res.offerings.map((it, i) => h`<tr class="ai-in ${it.warnings.length ? 'warnrow' : ''}" data-i="${i}"><td><input type="date" data-f="date" value="${it.date || ''}"></td><td><select data-f="accountId">${accOptions('in', it.accountId)}</select></td><td><input type="text" list="members-dl" data-f="donor" value="${it.donor}${it.donor2 ? ' & ' + it.donor2 : ''}">${it.warnings.length ? h`<div class="small warn">${it.warnings.join(' · ')}</div>` : ''}</td><td><input type="text" inputmode="decimal" data-f="amount" value="${inputAmt(it.amount)}"></td><td><select data-f="method">${methodOptions('현금')}</select></td></tr>`)}</tbody></table></div>` : ''}
+      ${res.expenses.length ? h`<h3>지출 ${res.expenses.length}건</h3><div class="tbl-wrap"><table class="list"><thead><tr><th>날짜</th><th>내용</th><th>예산 항목</th><th class="n">금액</th><th>결제</th></tr></thead><tbody>${res.expenses.map((it, i) => h`<tr class="ai-out ${it.warnings.length ? 'warnrow' : ''}" data-i="${i}"><td><input type="date" data-f="date" value="${it.date || ''}"></td><td><input type="text" data-f="memo" value="${it.memo}"></td><td><select data-f="accountId">${accOptions('out', it.accountId, { blank: true })}</select><div class="small muted">${it.reason}</div></td><td><input type="text" inputmode="decimal" data-f="amount" value="${inputAmt(it.amount)}"></td><td><select data-f="method">${methodOptions('카드')}</select></td></tr>`)}</tbody></table></div>
         <label class="btn sm">📷 영수증 사진 첨부(모든 지출 건에 같은 사진)<input type="file" id="ai-files" accept="image/*,application/pdf" multiple class="hidden"></label>` : ''}
       ${res.offerings.length || res.expenses.length ? h`<div class="row" style="margin-top:10px"><button class="btn gold" data-act="aiSave">✔ 모두 저장</button></div>` : ''}` : ''}
   </div>`;
@@ -305,12 +310,13 @@ export function vSettings() {
   const lt = lockedThrough(S.doc);
   return h`<h2 class="page">설정</h2>
   <div class="card"><h3>교회 정보</h3>
-    <div class="row"><label class="f grow"><span>교회 이름</span><input type="text" id="st-name" value="${st.churchName}"></label><label class="f grow"><span>고유번호(사업자번호)</span><input type="text" id="st-biz" value="${st.bizNo}"></label><label class="f grow"><span>대표자(담임목사)</span><input type="text" id="st-rep" value="${st.rep}"></label></div>
+    <div class="row"><label class="f grow"><span>교회(기관) 이름</span><input type="text" id="st-name" value="${st.churchName}"></label><label class="f grow"><span>${regionOf(S.doc).orgIdLabel}</span><input type="text" id="st-biz" value="${st.bizNo}"></label><label class="f grow"><span>대표자(담임목사)</span><input type="text" id="st-rep" value="${st.rep}"></label></div>
     <div class="row"><label class="f grow"><span>소재지</span><input type="text" id="st-addr" value="${st.address}"></label><label class="f"><span>회계 담당</span><input type="text" id="st-tr" value="${st.treasurer}"></label></div>
     <div class="row"><label class="f"><span>회계연도 시작월</span><select id="st-fy">${Array.from({ length: 12 }, (_, i) => i + 1).map((m) => h`<option value="${m}" ${m === st.fyStartMonth ? 'selected' : ''}>${m}월</option>`)}</select></label>
     <label class="f"><span>증빙 필요 기준(원 이상)</span><input type="number" id="st-th" value="${st.receiptThreshold || 0}"></label>
     <label class="f"><span>자동 잠금(분)</span><input type="number" id="st-lock" min="1" max="120" value="${st.autoLockMin || 10}"></label>
     <label class="f"><span>글자 크기</span><select id="st-size"><option value="">보통</option><option value="large" ${st.fontSize === 'large' ? 'selected' : ''}>크게</option></select></label></div>
+    <div class="row"><label class="f grow"><span>지역 · 영수증 방식</span><select id="st-region" ${S.doc.txs.length ? 'disabled' : ''}>${Object.values(REGIONS).map((r) => h`<option value="${r.code}" ${r.code === (st.region || 'KR') ? 'selected' : ''}>${r.label}</option>`)}</select>${S.doc.txs.length ? h`<small class="muted">거래가 입력된 뒤에는 금액 단위가 달라져 바꿀 수 없습니다.</small>` : ''}</label></div>
     <button class="btn primary" data-act="stSave">저장</button></div>
   <div class="card"><h3>예산 항목(계정과목)</h3><p class="small muted">교회 예산서와 똑같이 맞추세요. ‘별칭’은 헌금 입력 때 알아들을 말, ‘키워드’는 지출 메모 자동 분류 단서입니다. 쓰던 항목은 지우지 말고 ‘사용 안 함’으로.</p>
     <div class="tbl-wrap"><table class="list"><thead><tr><th>코드</th><th>구분</th><th>관</th><th>항</th><th>회계</th><th>사용</th><th></th></tr></thead><tbody>
@@ -321,7 +327,7 @@ export function vSettings() {
   <div class="card"><h3>백업 · 다른 기기로 옮기기</h3>
     <p>백업 파일은 <b>암호화</b>되어 있어 비밀번호(또는 복구코드) 없이는 열 수 없습니다. 구글드라이브·네이버MYBOX·카카오톡 ‘나에게 보내기’ 등에 안심하고 보관하세요. PC↔휴대폰은 백업 파일을 옮겨 ‘불러오기’하면 합쳐집니다.</p>
     <p class="small muted">마지막 백업: ${info.lastBackup ? info.lastBackup.slice(0, 16).replace('T', ' ') : '없음'}</p>
-    <div class="row"><button class="btn gold" data-act="backup">💾 백업 파일 만들기</button><label class="btn">📂 백업 불러오기(합치기)<input type="file" accept=".cjbak,application/json" class="hidden" data-change="restoreMerge"></label></div></div>
+    <div class="row"><button class="btn gold" data-act="backup">💾 백업 파일 만들기</button><label class="btn">📂 백업 불러오기(합치기)<input type="file" accept=".boaz,application/json" class="hidden" data-change="restoreMerge"></label></div></div>
   <div class="card"><h3>보안</h3>
     <div class="row"><button class="btn" data-act="pwChange">비밀번호 변경</button><button class="btn" data-act="lockNow">🔒 지금 잠그기</button><button class="btn" data-act="auditView">감사로그·무결성 검사</button></div>
     <p class="small muted" id="st-usage">저장 공간 확인 중…</p></div>
@@ -354,8 +360,8 @@ async function makeBackup() {
   const ids = await listFileIds();
   const files = [];
   for (const id of ids) { const b = await getFileBox(id); if (b) files.push({ id, iv: b.iv, ct: b64encode(b.ct) }); }
-  const data = JSON.stringify({ format: 'cheongjigi-backup', v: 1, createdAt: new Date().toISOString(), keyring: S.keyring, doc: docBox, files });
-  const name = `청지기장부_백업_${todayLocal()}.cjbak`;
+  const data = JSON.stringify({ format: 'boaz-backup', v: 1, createdAt: new Date().toISOString(), keyring: S.keyring, doc: docBox, files });
+  const name = `보아스_백업_${todayLocal()}.boaz`;
   const how = await shareOrDownload(name, new TextEncoder().encode(data), 'application/json');
   if (how === 'aborted') return;
   S.ui.info = { ...(S.ui.info || {}), lastBackup: new Date().toISOString() };
@@ -367,7 +373,7 @@ async function makeBackup() {
 export async function openBackup(file) {
   let b;
   try { b = JSON.parse(await file.text()); } catch { throw new Error('백업 파일을 읽을 수 없습니다'); }
-  if (b.format !== 'cheongjigi-backup') throw new Error('청지기 장부 백업 파일이 아닙니다');
+  if (b.format !== 'boaz-backup') throw new Error('보아스 백업 파일이 아닙니다');
   const r = await modal({ title: '백업 파일 열기', body: h`<p>이 백업을 만들 때의 <b>비밀번호</b> 또는 <b>복구코드</b>를 입력하세요.</p><input type="password" name="pw" autocomplete="current-password"><label class="row small"><input type="checkbox" name="rc"> 복구코드로 열기</label>`, actions: [{ key: 'cancel', label: '취소' }, { key: 'ok', label: '열기', cls: 'primary' }] });
   if (r.key !== 'ok') return null;
   const key = await unlockKeyring(b.keyring, r.values.pw, r.values.rc ? 'rc' : 'pw');
@@ -423,16 +429,16 @@ export const actions = {
     printHtml(parts.join('<div class="page-break"></div>'));
   },
   async bankCheck() {
-    const r = await modal({ title: '통장 잔액 대조', body: h`<p class="small">통장(인터넷뱅킹)에 보이는 잔액을 입력하면 같은 날짜의 장부 잔액과 비교해 보고서에 표시합니다.</p><div class="row"><label class="f"><span>날짜</span><input type="date" name="date" value="${today()}"></label><label class="f"><span>회계</span><select name="fund">${funds(S.doc).map((f) => h`<option>${f}</option>`)}</select></label></div><div class="row"><label class="f grow"><span>은행·계좌</span><input type="text" name="bank" placeholder="예: 농협 주계좌"></label><label class="f grow"><span>통장 잔액</span><input type="text" inputmode="numeric" name="amount"></label></div>`, actions: [{ key: 'cancel', label: '취소' }, { key: 'ok', label: '저장', cls: 'primary', validate: (v) => (parseKoreanAmount(v.amount) == null ? '잔액을 입력하세요' : '') }] });
+    const r = await modal({ title: '통장 잔액 대조', body: h`<p class="small">통장(인터넷뱅킹)에 보이는 잔액을 입력하면 같은 날짜의 장부 잔액과 비교해 보고서에 표시합니다.</p><div class="row"><label class="f"><span>날짜</span><input type="date" name="date" value="${today()}"></label><label class="f"><span>회계</span><select name="fund">${funds(S.doc).map((f) => h`<option>${f}</option>`)}</select></label></div><div class="row"><label class="f grow"><span>은행·계좌</span><input type="text" name="bank" placeholder="예: 농협 주계좌"></label><label class="f grow"><span>통장 잔액</span><input type="text" inputmode="numeric" name="amount"></label></div>`, actions: [{ key: 'cancel', label: '취소' }, { key: 'ok', label: '저장', cls: 'primary', validate: (v) => (parseMoney(v.amount) == null ? '잔액을 입력하세요' : '') }] });
     if (r.key !== 'ok') return;
-    addBankCheck(S.doc, { ...r.values, amount: parseKoreanAmount(r.values.amount) });
+    addBankCheck(S.doc, { ...r.values, amount: parseMoney(r.values.amount) });
     await commit(); toast('저장했습니다 — 보고서의 ‘통장 잔액 대조’에 표시됩니다'); S.render();
   },
   memSearch(el) { S.ui.memQ = el.value; clearTimeout(S.ui._mq); S.ui._mq = setTimeout(() => { S.render(); const i = $('#mem-q'); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }, 250); },
   memEdit(b) { return memEdit(b.dataset.id); },
   memImport,
   memTemplate() { download('교인명부_양식.csv', toCsv([['번호', '이름', '주정', '연락처', '주소', '가족', '주민번호', '메모'], [1, '홍길동', 20000, '010-0000-0000', '○○시 ○○구', 'F01', '', '']]), 'text/csv'); },
-  memExport() { download(`교인명부_${todayLocal()}.xlsx`, makeXlsx([{ name: '교인명부', rows: [['번호', '이름', '주정', '연락처', '주소', '가족', '상태', '주민번호(가림)', '메모'], ...S.doc.members.sort((a, b) => a.no - b.no).map((m) => [m.no, m.name, m.weekly || 0, m.phone || '', m.address || '', m.familyId || '', m.status || '사용', m.rrn ? maskRrn(m.rrn) : '', m.note || ''])] }]), 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'); },
+  memExport() { download(`교인명부_${todayLocal()}.xlsx`, makeXlsx([{ name: '교인명부', rows: [['번호', '이름', '주정', '연락처', '주소', '가족', '상태', '주민번호(가림)', '메모'], ...S.doc.members.sort((a, b) => a.no - b.no).map((m) => [m.no, m.name, major(m.weekly || 0), m.phone || '', m.address || '', m.familyId || '', m.status || '사용', m.rrn ? maskRrn(m.rrn) : '', m.note || ''])] }]), 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'); },
   rcYear(el) { S.ui.rcYear = +el.value; S.render(); },
   async rcIssue(b) { const y = S.ui.rcYear || +$('#rc-year').value; const r = issueReceipt(S.doc, y, b.dataset.key); await commit(); printReceipts([r]); S.render(); },
   rcPrint(b) { printReceipts([S.doc.receipts.find((r) => r.id === b.dataset.id)]); },
@@ -446,28 +452,28 @@ export const actions = {
   },
   rcLedger() {
     const y = S.ui.rcYear || +$('#rc-year').value;
-    download(`기부금영수증_발급명세_${y}.xlsx`, makeXlsx([{ name: `발급명세${y}`, rows: [['일련번호', '성명', '주민번호(가림)', '주소', '기부금액', '발급일', '상태', '재발급 전 번호'], ...S.doc.receipts.filter((r) => r.year === y).map((r) => { const m = S.doc.members.find((x) => x.id === r.memberId); return [r.serial, r.name, m?.rrn ? maskRrn(m.rrn) : '', m?.address || '', r.amount, r.issuedAt, r.voided ? '무효(재발급)' : '유효', (r.reissueOf || []).join(',')]; })] }]), 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    download(`기부금영수증_발급명세_${y}.xlsx`, makeXlsx([{ name: `발급명세${y}`, rows: [['일련번호', '성명', '주민번호(가림)', '주소', '기부금액', '발급일', '상태', '재발급 전 번호'], ...S.doc.receipts.filter((r) => r.year === y).map((r) => { const m = S.doc.members.find((x) => x.id === r.memberId); return [r.serial, r.name, m?.rrn ? maskRrn(m.rrn) : '', m?.address || '', major(r.amount), r.issuedAt, r.voided ? '무효(재발급)' : '유효', (r.reissueOf || []).join(',')]; })] }]), 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   },
   budFy(el) { S.ui.budFy = +el.value; S.render(); },
-  budCopy() { const fy = S.ui.budFy || fyOf(today(), S.doc.settings.fyStartMonth); const p = S.doc.budgets[fy - 1]?.items; if (!p) return toast('작년 예산이 없습니다', true); for (const el of $$('[data-bud]')) el.value = p[el.dataset.bud] || ''; toast('작년 예산을 채웠습니다. 확인 후 저장하세요'); },
+  budCopy() { const fy = S.ui.budFy || fyOf(today(), S.doc.settings.fyStartMonth); const p = S.doc.budgets[fy - 1]?.items; if (!p) return toast('작년 예산이 없습니다', true); for (const el of $$('[data-bud]')) el.value = p[el.dataset.bud] ? inputAmt(p[el.dataset.bud]) : ''; toast('작년 예산을 채웠습니다. 확인 후 저장하세요'); },
   budFromActual() {
     const fy = S.ui.budFy || fyOf(today(), S.doc.settings.fyStartMonth); const R = fyRange(fy - 1, S.doc.settings.fyStartMonth); const act = {};
     for (const t of liveTxs(S.doc)) if (t.date >= R.from && t.date <= R.to) act[t.accountId] = (act[t.accountId] || 0) + t.amount;
-    for (const el of $$('[data-bud]')) el.value = act[el.dataset.bud] || '';
+    for (const el of $$('[data-bud]')) el.value = act[el.dataset.bud] ? inputAmt(act[el.dataset.bud]) : '';
     toast('작년 결산 금액을 채웠습니다. 확인 후 저장하세요');
   },
   async budScale() {
     const r = await modal({ title: '비율 조정', body: h`<p>입력된 모든 예산을 몇 % 늘리거나 줄일까요? (예: 5, -3) 천 원 단위로 반올림합니다.</p><input type="number" name="p" value="5">`, actions: [{ key: 'cancel', label: '취소' }, { key: 'ok', label: '적용', cls: 'primary' }] });
     if (r.key !== 'ok') return;
     const k = 1 + (+r.values.p || 0) / 100;
-    for (const el of $$('[data-bud]')) { const v = parseKoreanAmount(el.value || '0') || 0; if (v) el.value = Math.round((v * k) / 1000) * 1000; }
+    for (const el of $$('[data-bud]')) { const v = parseMoney(el.value || '0') || 0; if (v) el.value = inputAmt(Math.round((v * k) / 1000) * 1000); }
     toast('조정했습니다. 확인 후 저장하세요');
   },
   async budSave() { const fy = S.ui.budFy || fyOf(today(), S.doc.settings.fyStartMonth); setBudget(S.doc, fy, readBudgetInputs()); await commit(); toast('예산을 저장했습니다'); S.render(); },
   async budConfirm() { const fy = S.ui.budFy || fyOf(today(), S.doc.settings.fyStartMonth); if (!(await confirmBox(`${fy}년도 예산을 확정할까요? (공동의회·제직회 통과 후)`))) return; setBudget(S.doc, fy, readBudgetInputs(), { status: '확정' }); await commit(); toast('확정했습니다'); S.render(); },
   async budUnlock() { const fy = S.ui.budFy || fyOf(today(), S.doc.settings.fyStartMonth); const reason = await askReason('확정 해제 사유(추경 등)'); if (reason == null) return; setBudget(S.doc, fy, {}, { status: '작성중', memo: { _unlock: reason } }); await commit(); S.render(); },
   budPrint() { printHtml(budgetHtml(S.ui.budFy || fyOf(today(), S.doc.settings.fyStartMonth))); },
-  async openSave() { const fy = S.ui.budFy || fyOf(today(), S.doc.settings.fyStartMonth); for (const el of $$('[data-open]')) if (el.value.trim() !== '') setOpening(S.doc, fy, el.dataset.open, parseKoreanAmount(el.value) || 0); else if (S.doc.openings[fy]?.funds) delete S.doc.openings[fy].funds[el.dataset.open]; await commit(); toast('이월금을 저장했습니다'); S.render(); },
+  async openSave() { const fy = S.ui.budFy || fyOf(today(), S.doc.settings.fyStartMonth); for (const el of $$('[data-open]')) if (el.value.trim() !== '') setOpening(S.doc, fy, el.dataset.open, parseMoney(el.value) || 0); else if (S.doc.openings[fy]?.funds) delete S.doc.openings[fy].funds[el.dataset.open]; await commit(); toast('이월금을 저장했습니다'); S.render(); },
   aiCopySetup() { copyText(setupPrompt(S.doc)); },
   aiCopyOne(b) { copyText(oneShotPrompt(S.doc, b.dataset.k)); },
   aiParse() { const a = S.ui.ai; a.text = $('#ai-text').value; a.date = $('#ai-date').value; a.res = parseBridge(a.text, S.doc, { date: a.date }); if (!a.res.lines) toast('“I|…” 또는 “O|…” 형식의 줄이 없습니다', true); S.render(); },
@@ -482,19 +488,20 @@ export const actions = {
       const g = (f) => $(`[data-f="${f}"]`, tr).value;
       const [p1, p2] = g('donor').split('&').map((s) => s.trim());
       const d1 = resolveDonor(p1), d2 = p2 ? resolveDonor(p2) : { memberId: null, donor: '' };
-      addTx(S.doc, { date: g('date') || a.date, kind: 'in', accountId: g('accountId'), amount: parseKoreanAmount(g('amount')), memberId: d1.memberId, donor: d1.donor, memberId2: d2.memberId, donor2: p2 ? d2.donor : '', method: g('method'), source: 'AI' }, { reason: '' });
+      addTx(S.doc, { date: g('date') || a.date, kind: 'in', accountId: g('accountId'), amount: parseMoney(g('amount')), memberId: d1.memberId, donor: d1.donor, memberId2: d2.memberId, donor2: p2 ? d2.donor : '', method: g('method'), source: 'AI' }, { reason: '' });
       n++;
     }
     for (const tr of $$('tr.ai-out')) {
       const g = (f) => $(`[data-f="${f}"]`, tr).value;
-      addTx(S.doc, { date: g('date') || a.date, kind: 'out', accountId: g('accountId'), amount: parseKoreanAmount(g('amount')), memo: g('memo'), method: g('method'), attachments: atts, source: 'AI' });
+      addTx(S.doc, { date: g('date') || a.date, kind: 'out', accountId: g('accountId'), amount: parseMoney(g('amount')), memo: g('memo'), method: g('method'), attachments: atts, source: 'AI' });
       n++;
     }
     await commit(); S.ui.ai = { text: '', res: null }; toast(`${n}건 저장했습니다`); S.render();
   },
   async stSave() {
     const st = S.doc.settings;
-    Object.assign(st, { churchName: $('#st-name').value.trim() || st.churchName, bizNo: $('#st-biz').value.trim(), rep: $('#st-rep').value.trim(), address: $('#st-addr').value.trim(), treasurer: $('#st-tr').value.trim(), fyStartMonth: +$('#st-fy').value, receiptThreshold: +$('#st-th').value || 0, autoLockMin: Math.max(1, +$('#st-lock').value || 10), fontSize: $('#st-size').value, updatedAt: new Date().toISOString() });
+    Object.assign(st, { churchName: $('#st-name').value.trim() || st.churchName, bizNo: $('#st-biz').value.trim(), rep: $('#st-rep').value.trim(), address: $('#st-addr').value.trim(), treasurer: $('#st-tr').value.trim(), fyStartMonth: +$('#st-fy').value, receiptThreshold: +$('#st-th').value || 0, autoLockMin: Math.max(1, +$('#st-lock').value || 10), fontSize: $('#st-size').value, region: S.doc.txs.length ? st.region : $('#st-region').value || st.region, updatedAt: new Date().toISOString() });
+    const { setRegion } = await import('./core/region.js'); setRegion(st.region || 'KR');
     document.documentElement.dataset.size = st.fontSize || '';
     const { appendAudit } = await import('./core/ledger.js');
     appendAudit(S.doc, 'settings', '', '교회 정보·설정 변경');

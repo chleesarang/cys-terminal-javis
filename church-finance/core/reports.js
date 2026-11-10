@@ -1,6 +1,7 @@
 // 결산·보고 엔진 — AI 없이 결정론적으로 계산 (토큰 0, 재현 가능)
 import { fyOf, fyRange, liveTxs, funds as fundList, isLocked, lockedThrough } from './ledger.js';
-import { sundayOf, addDays, monthStart, monthEnd, addMonths, todayLocal, uid } from './util.js';
+import { sundayOf, addDays, monthStart, monthEnd, addMonths, todayLocal, uid, money } from './util.js';
+import { regionOf } from './region.js';
 import { appendAudit } from './ledger.js';
 
 const accMap = (doc) => new Map(doc.accounts.map((a) => [a.id, a]));
@@ -115,21 +116,21 @@ export function auditFlags(doc, txs) {
   const flags = [];
   const th = doc.settings.receiptThreshold || 0;
   for (const t of txs) {
-    if (t.kind === 'out' && !(t.attachments?.length) && !t.noReceiptReason && t.amount >= th) flags.push({ level: 'warn', txId: t.id, msg: `증빙 없음: ${t.date} ${t.memo || ''} ${t.amount.toLocaleString()}원` });
+    if (t.kind === 'out' && !(t.attachments?.length) && !t.noReceiptReason && t.amount >= th) flags.push({ level: 'warn', txId: t.id, msg: `증빙 없음: ${t.date} ${t.memo || ''} ${money(t.amount)}` });
     if (t.kind === 'out' && !t.accountId) flags.push({ level: 'warn', txId: t.id, msg: `미분류 지출: ${t.date} ${t.memo || ''}` });
-    if (t.kind === 'out' && t.method === '현금' && t.amount >= 500000) flags.push({ level: 'info', txId: t.id, msg: `고액 현금 지출: ${t.date} ${t.amount.toLocaleString()}원` });
+    if (t.kind === 'out' && t.method === '현금' && t.amount >= regionOf(doc).cashAlert) flags.push({ level: 'info', txId: t.id, msg: `고액 현금 지출: ${t.date} ${money(t.amount)}` });
   }
   // 중복 의심: 같은 날·종류·계정·금액·이름/메모
   const seen = new Map();
   for (const t of txs) {
     const k = [t.date, t.kind, t.accountId, t.amount, t.memberId || t.donor, t.memo].join('|');
-    if (seen.has(k)) flags.push({ level: 'warn', txId: t.id, msg: `중복 의심: ${t.date} ${t.donor || t.memo || ''} ${t.amount.toLocaleString()}원` });
+    if (seen.has(k)) flags.push({ level: 'warn', txId: t.id, msg: `중복 의심: ${t.date} ${t.donor || t.memo || ''} ${money(t.amount)}` });
     else seen.set(k, t.id);
   }
   // 현금 계수 vs 장부 대조
   for (const b of doc.batches || []) {
     const dayCash = txs.filter((t) => t.kind === 'in' && t.date === b.date && t.method === '현금').reduce((s, t) => s + t.amount, 0);
-    if (txs.some((t) => t.date === b.date) && b.cashTotal !== dayCash) flags.push({ level: 'warn', msg: `현금 계수 불일치 ${b.date}: 계수 ${b.cashTotal.toLocaleString()}원 ≠ 장부 현금 ${dayCash.toLocaleString()}원` });
+    if (txs.some((t) => t.date === b.date) && b.cashTotal !== dayCash) flags.push({ level: 'warn', msg: `현금 계수 불일치 ${b.date}: 계수 ${money(b.cashTotal)} ≠ 장부 현금 ${money(dayCash)}` });
     if (txs.some((t) => t.date === b.date) && (b.counters || []).filter(Boolean).length < 2) flags.push({ level: 'info', msg: `계수자 2인 미기재 ${b.date}` });
   }
   // 마감 후 수정 이력
@@ -159,11 +160,13 @@ export function donorTotals(doc, year) {
     if (!a || a.receipt === false) continue;
     const key = t.memberId || (t.donor && t.donor !== '무명' ? 'n:' + t.donor : null);
     if (!key) continue;
-    const r = res.get(key) || { key, memberId: t.memberId || null, name: t.donor, total: 0, months: {}, byAcc: {} };
+    const r = res.get(key) || { key, memberId: t.memberId || null, name: t.donor, total: 0, months: {}, byAcc: {}, gifts: [], joint: [] };
     r.total += t.amount;
     const mo = t.date.slice(0, 7);
     r.months[mo] = (r.months[mo] || 0) + t.amount;
     r.byAcc[a.name] = (r.byAcc[a.name] || 0) + t.amount;
+    r.gifts.push({ date: t.date, account: a.name, method: t.method, amount: t.amount });
+    if (t.donor2 && !r.joint.includes(t.donor2)) r.joint.push(t.donor2);
     res.set(key, r);
   }
   const mem = new Map(doc.members.map((x) => [x.id, x]));
@@ -177,9 +180,9 @@ export function issueReceipt(doc, year, donorKey) {
   const prev = doc.receipts.filter((r) => r.year === year && !r.voided && r.donorKey === donorKey);
   for (const p of prev) { p.voided = true; p.updatedAt = new Date().toISOString(); } // 재발급 시 이전 것 무효
   const seq = doc.receipts.filter((r) => r.year === year).reduce((mx, r) => Math.max(mx, +r.serial.split('-')[1]), 0) + 1;
-  const r = { id: uid(), serial: `${year}-${String(seq).padStart(3, '0')}`, year, donorKey, memberId: d.memberId, name: d.name, amount: d.total, months: d.months, issuedAt: todayLocal(), voided: false, updatedAt: new Date().toISOString(), reissueOf: prev.map((p) => p.serial) };
+  const r = { id: uid(), serial: `${year}-${String(seq).padStart(3, '0')}`, year, donorKey, memberId: d.memberId, name: d.name, amount: d.total, months: d.months, gifts: d.gifts.sort((x, y) => (x.date < y.date ? -1 : 1)), joint: d.joint, region: regionOf(doc).code, issuedAt: todayLocal(), voided: false, updatedAt: new Date().toISOString(), reissueOf: prev.map((p) => p.serial) };
   doc.receipts.push(r);
-  appendAudit(doc, 'receipt', r.id, `기부금영수증 ${r.serial} ${r.name} ${r.amount}원${prev.length ? ' (재발급)' : ''}`);
+  appendAudit(doc, 'receipt', r.id, `영수증 ${r.serial} ${r.name} ${money(r.amount)}${prev.length ? ' (재발급)' : ''}`);
   return r;
 }
 

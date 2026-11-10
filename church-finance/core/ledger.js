@@ -4,16 +4,16 @@ import { cloneDefaultAccounts } from './accounts.js';
 import { uid, isYmd, sha256, stableJson, addMonths, addDays } from './util.js';
 
 export const SCHEMA = 1;
-export const METHODS = ['현금', '계좌', '카드', '기타'];
+export const METHODS = ['현금', '계좌', '수표', '카드', '기타'];
 
-export function createDoc({ churchName = '', fyStartMonth = 1, deviceId = uid() } = {}) {
+export function createDoc({ churchName = '', fyStartMonth = 1, region = 'KR', deviceId = uid() } = {}) {
   const now = new Date().toISOString();
   return {
     schema: SCHEMA,
-    app: 'cheongjigi-ledger',
+    app: 'boaz-ledger',
     deviceId,
     settings: {
-      churchName, fyStartMonth, bizNo: '', address: '', rep: '', treasurer: '', phone: '',
+      churchName, fyStartMonth, region, bizNo: '', address: '', rep: '', treasurer: '', phone: '',
       autoLockMin: 10, receiptThreshold: 0, updatedAt: now,
     },
     accounts: cloneDefaultAccounts().map((a) => ({ ...a, updatedAt: now })),
@@ -225,8 +225,8 @@ export function setOpening(doc, fy, fund, amount) {
 }
 
 // ── 헌금 계수 기록 ──
-export const BILLS = [50000, 10000, 5000, 1000, 500, 100, 50, 10];
-export function cashTotal(cash = {}) { return BILLS.reduce((s, b) => s + b * (parseInt(cash[b], 10) || 0), 0); }
+/** 권종별 매수 → 합계. 키 = 권종의 최소단위 값(원 또는 센트)이라 지역과 무관 */
+export function cashTotal(cash = {}) { return Object.entries(cash).reduce((s, [b, n]) => s + +b * (parseInt(n, 10) || 0), 0); }
 export function upsertBatch(doc, b) {
   const now = new Date().toISOString();
   let ex = b.id && doc.batches.find((x) => x.id === b.id);
@@ -266,7 +266,7 @@ function mergeKeyed(a = {}, b = {}) {
   return out;
 }
 export function mergeDocs(local, incoming) {
-  if (incoming.app !== 'cheongjigi-ledger') throw new Error('이 앱의 장부 파일이 아닙니다');
+  if (incoming.app !== 'boaz-ledger') throw new Error('이 앱의 장부 파일이 아닙니다');
   const stats = {};
   for (const key of ['txs', 'members', 'accounts', 'receipts', 'locks', 'batches', 'bankChecks']) {
     const r = mergeById(local[key], incoming[key]);

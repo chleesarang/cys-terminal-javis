@@ -1,7 +1,7 @@
 // 인쇄용 문서(HTML) — 제직회 보고서·지출결의서·기부금영수증·헌금 집계표
 // 모든 사용자 입력은 esc()를 거친다(XSS 차단).
-import { esc, won, fmtDate, todayLocal, maskRrn, fmtRrn } from './util.js';
-import { BILLS } from './ledger.js';
+import { esc, won, money, fmtDate, todayLocal, maskRrn, fmtRrn, currencyInfo } from './util.js';
+import { regionOf } from './region.js';
 
 const D = ['', '일', '이', '삼', '사', '오', '육', '칠', '팔', '구'];
 /** 150000 → "일십오만" (지출결의서·영수증의 한글 금액) */
@@ -22,6 +22,25 @@ export function koreanAmountText(n) {
   }
   return out;
 }
+
+const ONES = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten', 'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen'];
+const TENS = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety'];
+function words999(n) {
+  const h = Math.floor(n / 100), r = n % 100;
+  const rest = r < 20 ? ONES[r] : TENS[Math.floor(r / 10)] + (r % 10 ? '-' + ONES[r % 10] : '');
+  return [h ? ONES[h] + ' Hundred' : '', rest].filter(Boolean).join(' ');
+}
+/** 센트 → 수표식 영문 금액: 123456 → "One Thousand Two Hundred Thirty-Four and 56/100 Dollars" */
+export function usdWords(cents) {
+  cents = Math.round(Math.abs(cents));
+  let d = Math.floor(cents / 100);
+  const c = cents % 100;
+  const scales = ['', 'Thousand', 'Million', 'Billion'];
+  const parts = [];
+  for (let i = 0; d > 0; i++, d = Math.floor(d / 1000)) { const g = d % 1000; if (g) parts.unshift(words999(g) + (scales[i] ? ' ' + scales[i] : '')); }
+  return `${parts.join(' ') || 'Zero'} and ${String(c).padStart(2, '0')}/100 Dollars`;
+}
+const unitNote = () => (currencyInfo().code === 'USD' ? '단위: 달러($)' : '단위: 원');
 
 const head = (doc, title, sub) => `<div class="doc-head"><div class="doc-church">${esc(doc.settings.churchName)}</div><h1>${esc(title)}</h1>${sub ? `<div class="doc-sub">${sub}</div>` : ''}</div>`;
 const sign = (labels) => `<table class="sign"><tr>${labels.map((l) => `<th>${esc(l)}</th>`).join('')}</tr><tr>${labels.map(() => '<td></td>').join('')}</tr></table>`;
@@ -56,7 +75,7 @@ export function financeReportHtml(doc, s, { title = '재정 보고서', showWeek
   const detail = outList.length && outList.length <= 60 ? `<h2>지출 명세</h2><table class="t small"><thead><tr><th>일자</th><th>항목</th><th>내용</th><th>금액</th><th>증빙</th></tr></thead><tbody>${outList.map((t) => `<tr><td>${esc(t.date.slice(5).replace('-', '/'))}</td><td>${esc(accName(t.accountId))}</td><td>${esc(t.payee ? t.payee + ' ' : '')}${esc(t.memo)}</td><td class="n">${won(t.amount)}</td><td>${t.attachments?.length ? '○' : t.noReceiptReason ? '사유' : '✕'}</td></tr>`).join('')}</tbody></table>` : '';
   const bank = s.bank.length ? `<h2>통장 잔액 대조</h2><table class="t small"><thead><tr><th>일자</th><th>회계</th><th>은행</th><th>통장</th><th>장부</th><th>차이</th></tr></thead><tbody>${s.bank.map((b) => `<tr><td>${esc(b.date)}</td><td>${esc(b.fund)}</td><td>${esc(b.bank)}</td><td class="n">${won(b.amount)}</td><td class="n">${won(b.book)}</td><td class="n ${b.diff ? 'bad' : ''}">${won(b.diff)}</td></tr>`).join('')}</tbody></table>` : '';
   const flags = showFlags && s.flags.length ? `<h2>감사 점검 사항 (${s.flags.length})</h2><ul class="flags">${s.flags.slice(0, 40).map((f) => `<li class="${f.level}">${esc(f.msg)}</li>`).join('')}</ul>` : '';
-  return `<article class="doc">${head(doc, title, `${fmtDate(s.from)} ~ ${fmtDate(s.to)} · ${s.fy}년도 예산(${esc(s.budgetStatus)}) · 작성 ${fmtDate(todayLocal())}`)}
+  return `<article class="doc">${head(doc, title, `${fmtDate(s.from)} ~ ${fmtDate(s.to)} · ${s.fy}년도 예산(${esc(s.budgetStatus)}) · ${unitNote()} · 작성 ${fmtDate(todayLocal())}`)}
 <h2>요약</h2>${fundTable}<h2>수입</h2>${accTable('in')}<h2>지출</h2>${accTable('out')}${weekly}${monthly}${detail}${bank}${flags}
 ${sign(['회계', '재정부장', '감사', '담임목사'])}</article>`;
 }
@@ -68,7 +87,7 @@ export function voucherHtml(doc, t, images = []) {
 ${sign(['담당', '회계', '재정부장', '담임목사'])}
 <table class="t form"><tr><th>결의일</th><td>${fmtDate(t.createdAt?.slice(0, 10) || t.date)}</td><th>지출일</th><td>${fmtDate(t.date)}</td></tr>
 <tr><th>관</th><td>${esc(a?.gwan || '미분류')}</td><th>항</th><td>${esc(a?.name || '미분류')}</td></tr>
-<tr><th>금액</th><td colspan="3"><b>일금 ${koreanAmountText(t.amount)}원정</b> (₩${won(t.amount)})</td></tr>
+<tr><th>금액</th><td colspan="3">${currencyInfo().code === 'USD' ? `<b>${money(t.amount)}</b> (${usdWords(t.amount)})` : `<b>일금 ${koreanAmountText(t.amount)}원정</b> (₩${won(t.amount)})`}</td></tr>
 <tr><th>지급처</th><td>${esc(t.payee || '')}</td><th>결제</th><td>${esc(t.method || '')}</td></tr>
 <tr><th>내용</th><td colspan="3">${esc(t.memo)}</td></tr>
 <tr><th>증빙</th><td colspan="3">${images.length ? `영수증 ${images.length}매 첨부` : t.noReceiptReason ? '증빙 없음 — 사유: ' + esc(t.noReceiptReason) : '증빙 없음'}</td></tr>
@@ -76,8 +95,37 @@ ${sign(['담당', '회계', '재정부장', '담임목사'])}
 ${images.map((src) => `<div class="voucher-img"><img src="${esc(src)}" alt="영수증"></div>`).join('')}</article>`;
 }
 
-/** 기부금영수증 — 소득세법 시행규칙 별지 제45호의2서식 구조. 최신 서식은 국세청 고시와 대조 후 사용 */
-export function receiptHtml(doc, r, member, { showRrn = true } = {}) {
+/** 지역별 영수증: 한국 = 국세청 기부금영수증, 미국 = IRS 기준 Contribution Statement */
+export function receiptHtml(doc, r, member, opt = {}) {
+  return regionOf(doc).code === 'US' ? usStatementHtml(doc, r, member) : krReceiptHtml(doc, r, member, opt);
+}
+
+/** 미국: 연간 헌금 확인서(Contribution Statement) — 한영 병기, 헌금별 날짜·금액, 재화·용역 제공 여부 문구 */
+export function usStatementHtml(doc, r, member) {
+  const st = doc.settings;
+  const gifts = r.gifts || [];
+  const d = r.issuedAt;
+  const mon = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  const enDate = (x) => `${mon[+x.slice(5, 7) - 1]} ${+x.slice(8, 10)}, ${x.slice(0, 4)}`;
+  return `<article class="doc receipt us">
+<div class="r-top"><span>Statement No. ${esc(r.serial)}</span><span>Tax Year ${esc(r.year)}</span></div>
+<h1 class="r-title us">Contribution Statement</h1><p class="r-sub">${esc(r.year)}년 헌금 영수증 (연간 헌금 확인서)</p>
+<table class="t form"><tr><th>Church / 교회</th><td>${esc(st.churchName)}</td><th>EIN</th><td>${esc(st.bizNo)}</td></tr>
+<tr><th>Address / 주소</th><td colspan="3">${esc(st.address)}</td></tr></table>
+<table class="t form"><tr><th>Donor / 헌금자</th><td>${esc(r.name)}${r.joint?.length ? ' &amp; ' + esc(r.joint.join(', ')) : ''}</td></tr>
+<tr><th>Address / 주소</th><td>${esc(member?.address || '')}</td></tr></table>
+<table class="t small"><thead><tr><th>Date / 날짜</th><th>Fund / 항목</th><th>Method / 방법</th><th>Amount / 금액</th></tr></thead><tbody>
+${gifts.map((g) => `<tr><td>${esc(g.date.replace(/-/g, '/'))}</td><td>${esc(g.account)}</td><td>${esc(regionOf(doc).methodLabels[g.method] || g.method || '')}</td><td class="n">${money(g.amount)}</td></tr>`).join('')}
+<tr class="sum"><td colspan="3">Total contributions / 합계</td><td class="n">${money(r.amount)}</td></tr></tbody></table>
+<p class="r-law"><b>No goods or services were provided in exchange for these contributions other than intangible religious benefits.</b><br>위 헌금에 대하여 무형의 종교적 혜택 외에 어떠한 재화나 용역도 제공되지 않았습니다.</p>
+<p class="small">Please retain this statement for your tax records. / 세금 신고 자료로 보관하십시오.</p>
+<p class="r-date">Date issued / 발행일: ${esc(enDate(d))}</p>
+<p class="r-sign">${esc(st.churchName)} &nbsp; Authorized signature / 서명: ____________________ ${st.treasurer ? '(' + esc(st.treasurer) + ')' : ''}</p>
+<p class="muted small no-print">※ IRS Publication 1771 기준 문구입니다. 주 법·특수 상황(현물 기부, 대가가 있는 헌금 등)은 세무 전문가와 확인하세요.</p></article>`;
+}
+
+/** 한국: 기부금영수증 — 소득세법 시행규칙 별지 제45호의2서식 구조. 최신 서식은 국세청 고시와 대조 후 사용 */
+export function krReceiptHtml(doc, r, member, { showRrn = true } = {}) {
   const st = doc.settings;
   const rrn = member?.rrn ? (showRrn ? fmtRrn(member.rrn) : maskRrn(member.rrn)) : '';
   const months = Object.entries(r.months || {}).sort();
@@ -101,11 +149,12 @@ export function countSheetHtml(doc, batch, txs) {
   const byAcc = {};
   for (const t of txs) { const k = acc(t.accountId); (byAcc[k] ||= { cash: 0, bank: 0, n: 0 }); byAcc[k][t.method === '현금' ? 'cash' : 'bank'] += t.amount; byAcc[k].n++; }
   const cashBook = txs.filter((t) => t.method === '현금').reduce((s, t) => s + t.amount, 0);
+  const bills = regionOf(doc).bills;
   const one = (copy) => `<article class="doc count">${head(doc, '헌금 집계표', `${fmtDate(batch.date)} · ${copy}`)}
 <table class="t"><thead><tr><th>헌금 종류</th><th>건수</th><th>현금</th><th>계좌 등</th><th>계</th></tr></thead><tbody>${Object.entries(byAcc).map(([k, v]) => `<tr><td>${esc(k)}</td><td class="n">${v.n}</td><td class="n">${won(v.cash)}</td><td class="n">${won(v.bank)}</td><td class="n b">${won(v.cash + v.bank)}</td></tr>`).join('')}
 <tr class="sum"><td>합계</td><td class="n">${txs.length}</td><td class="n">${won(cashBook)}</td><td class="n">${won(txs.reduce((s, t) => s + (t.method === '현금' ? 0 : t.amount), 0))}</td><td class="n b">${won(txs.reduce((s, t) => s + t.amount, 0))}</td></tr></tbody></table>
-<h3>현금 계수</h3><table class="t small"><thead><tr><th>권종</th>${BILLS.map((b) => `<th>${won(b)}</th>`).join('')}<th>계</th></tr></thead><tbody><tr><td>매수</td>${BILLS.map((b) => `<td class="n">${esc(batch.cash?.[b] || '')}</td>`).join('')}<td class="n b">${won(batch.cashTotal)}</td></tr></tbody></table>
-<p class="${batch.cashTotal === cashBook ? 'ok' : 'bad'}">계수 ${won(batch.cashTotal)}원 / 장부 현금 ${won(cashBook)}원 → ${batch.cashTotal === cashBook ? '일치' : '차이 ' + won(batch.cashTotal - cashBook) + '원'}</p>
+<h3>현금 계수</h3><table class="t small"><thead><tr><th>권종</th>${bills.map(([, l]) => `<th>${esc(l)}</th>`).join('')}<th>계</th></tr></thead><tbody><tr><td>매수</td>${bills.map(([b]) => `<td class="n">${esc(batch.cash?.[b] || '')}</td>`).join('')}<td class="n b">${money(batch.cashTotal)}</td></tr></tbody></table>
+<p class="${batch.cashTotal === cashBook ? 'ok' : 'bad'}">계수 ${money(batch.cashTotal)} / 장부 현금 ${money(cashBook)} → ${batch.cashTotal === cashBook ? '일치' : '차이 ' + money(batch.cashTotal - cashBook)}</p>
 ${sign(['계수자 ' + (batch.counters?.[0] || ''), '계수자 ' + (batch.counters?.[1] || ''), '회계'])}</article>`;
   return one('계수자 보관용') + '<div class="page-break"></div>' + one('회계 보관용');
 }

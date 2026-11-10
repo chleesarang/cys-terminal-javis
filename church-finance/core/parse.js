@@ -1,9 +1,9 @@
 // 로컬 규칙 파서 — 타이핑·음성받아쓰기·붙여넣기 문장을 AI 없이(토큰 0) 구조화
-//   "십일조 김철수 10만원, 감사 이영희 5만"  → 헌금 2건
-//   "12 십일조 10만" / "#12" / "김철수(12)"   → 교인번호 12
+//   "십일조 홍길동 10만원, 감사 성춘향 5만"  → 헌금 2건
+//   "12 십일조 10만" / "#12" / "홍길동(12)"   → 교인번호 12
 //   "3"  (주일헌금)                           → 교인 3번의 주정 금액 자동
 //   "11/8 목양실 커피 23,000 카드"            → 지출 1건 + 계정 자동분류
-import { todayLocal, isYmd } from './util.js';
+import { todayLocal, isYmd, currencyInfo, money } from './util.js';
 
 const DIG = { 영: 0, 공: 0, 일: 1, 이: 2, 삼: 3, 사: 4, 오: 5, 육: 6, 륙: 6, 칠: 7, 팔: 8, 구: 9 };
 const SMALL = { 십: 10, 백: 100, 천: 1000 };
@@ -35,8 +35,29 @@ export function parseKoreanAmount(input) {
   return Number.isFinite(v) && v >= 0 ? v : null;
 }
 
+/** 지역 통화에 맞춰 금액 → 최소 단위 정수. 원화: "10만"→100000 / 달러: "$23.50"→2350, "100불"→10000, "삼백 달러"→30000 */
+export function parseMoney(input) {
+  const c = currencyInfo();
+  const raw = String(input ?? '').trim();
+  if (c.code !== 'USD') return parseKoreanAmount(raw);
+  const s = raw.replace(/^(US\$|USD|\$)\s*/i, '').replace(/\s*(달러|불|dollars?|usd)$/i, '').replace(/\$/g, '').trim();
+  const t = s.replace(/[\s,]/g, '');
+  if (/^\d+(\.\d{1,2})?$/.test(t)) return Math.round(parseFloat(t) * 100);
+  if (/^\d*\.\d+$/.test(t)) return null;
+  const v = parseKoreanAmount(s);
+  return v == null ? null : v * 100;
+}
+
 // 토큰이 금액인지 판정. strong=확실한 금액, weak=단독 단위(만/천/원)처럼 인접할 때만 금액
 function amountKind(tok) {
+  if (currencyInfo().code === 'USD') {
+    if (/^(불|달러|dollars?|usd)$/i.test(tok)) return 'won';
+    if (/^\$/.test(tok) || /(불|달러)$/.test(tok)) return parseMoney(tok) != null ? 'strong' : null;
+    if (/^\d+$/.test(tok)) return 'num'; // 위치로 교인번호/금액 결정(usNumPolicy)
+    if (/^\d[\d,]*(\.\d{1,2})?$/.test(tok)) return 'strong';
+    if (/[백천만]/.test(tok) && parseKoreanAmount(tok) != null) return 'strong';
+    return null;
+  }
   if (tok === '원') return 'won';
   const hasDigit = /[0-9]/.test(tok);
   const endsWon = /원정?$/.test(tok);
@@ -55,7 +76,7 @@ function amountKind(tok) {
 }
 
 const TITLES = ['안수집사', '집사님', '권사님', '장로님', '목사님', '전도사님', '성도님', '집사', '권사', '장로', '목사', '전도사', '성도', '청년', '권찰', '형제', '자매', '교우', '님'];
-const METHOD = [['계좌이체', '계좌'], ['온라인', '계좌'], ['이체', '계좌'], ['계좌', '계좌'], ['송금', '계좌'], ['통장', '계좌'], ['현금', '현금'], ['카드', '카드'], ['법인카드', '카드']];
+const METHOD = [['수표', '수표'], ['체크', '수표'], ['check', '수표'], ['zelle', '계좌'], ['젤', '계좌'], ['젤리', '계좌'], ['venmo', '계좌'], ['paypal', '계좌'], ['계좌이체', '계좌'], ['온라인', '계좌'], ['이체', '계좌'], ['계좌', '계좌'], ['송금', '계좌'], ['통장', '계좌'], ['현금', '현금'], ['카드', '카드'], ['법인카드', '카드']];
 const ANON = ['무명', '익명', '무기명'];
 function isNoise(t) { const n = norm(t); return METHOD.some(([w]) => n === w) || TITLES.includes(t) || FILLER.includes(t); }
 const FILLER = ['부부', '공동', '내외', '가정', '가족', '헌금', '드림', '드립니다', '입니다', '이요', '요'];
@@ -95,9 +116,9 @@ function aliasTable(accounts, kind) {
 
 function tokenize(seg) {
   let s = seg
-    .replace(/([가-힣]{2,5})\((\d{1,4})\)/g, '$1 #$2') // 김철수(12)
+    .replace(/([가-힣]{2,5})\((\d{1,4})\)/g, '$1 #$2') // 홍길동(12)
     .replace(/(\d{1,4})\s*번(?![가-힣])/g, '#$1')      // 12번
-    .replace(/([가-힣a-zA-Z)])(\d)/g, '$1 $2')          // 김철수10만 → 김철수 10만
+    .replace(/([가-힣a-zA-Z)])(\d)/g, '$1 $2')          // 홍길동10만 → 홍길동 10만
     .replace(/[·&/+]/g, ' & ')
     .replace(/[:"'“”‘’()[\]{}]/g, ' ');
   return s.split(/\s+/).filter(Boolean);
@@ -117,6 +138,12 @@ function findMember(members, { no, name }) {
   return null;
 }
 
+/** 미국 모드: 줄 맨 앞 숫자(뒤에 다른 말이 있을 때)나 숫자 하나만 있는 줄 = 교인번호, 나머지 숫자 = 달러 금액 */
+function usNumPolicy(toks, kinds) {
+  if (currencyInfo().code !== 'USD') return kinds;
+  return kinds.map((k, i) => (k !== 'num' ? k : i === 0 ? 'num' : 'strong'));
+}
+
 /**
  * 헌금 문장 파싱
  * @returns items: [{date, accountId, memberId, donor, memberId2, donor2, amount, method, memo, warnings[]}]
@@ -129,7 +156,7 @@ export function parseOfferings(text, { accounts, members = [], defaultAccountId,
     const { date: d, rest } = extractDate(seg0, refDate || date || todayLocal());
     const toks = tokenize(rest);
     // 금액 덩어리(run) 기준으로 항목 분할 (헌금 종류 별칭이 들어간 토큰은 금액 아님)
-    const kinds = toks.map((t) => (aliases.some(([al]) => norm(t).includes(al)) ? null : amountKind(t)));
+    const kinds = usNumPolicy(toks, toks.map((t) => (aliases.some(([al]) => norm(t).includes(al)) ? null : amountKind(t))));
     const groups = [];
     let cur = [];
     for (let i = 0; i < toks.length; i++) {
@@ -157,7 +184,7 @@ export function parseOfferings(text, { accounts, members = [], defaultAccountId,
 function buildOffering(group, { aliases, members, defaultAccountId, weeklyAcc, date }) {
   const it = { date: date || null, accountId: null, memberId: null, donor: '', memberId2: null, donor2: '', amount: null, method: null, memo: '', warnings: [] };
   const amtText = group.filter((c) => c.amt).map((c) => c.t).join('');
-  if (amtText) it.amount = parseKoreanAmount(amtText);
+  if (amtText) it.amount = parseMoney(amtText);
   const names = [];
   const memoParts = [];
   let memberNo = null;
@@ -169,7 +196,7 @@ function buildOffering(group, { aliases, members, defaultAccountId, weeklyAcc, d
     if (c.k === 'num') { names.push({ no: +t }); continue; }
     const mt = METHOD.find(([w]) => norm(t) === w);
     if (mt) { it.method = mt[1]; continue; }
-    // 헌금 종류(붙어 있는 경우 포함: 김철수십일조)
+    // 헌금 종류(붙어 있는 경우 포함: 홍길동십일조)
     if (!it.accountId) {
       const n = norm(t);
       const hit = aliases.find(([al]) => n.includes(al));
@@ -211,7 +238,7 @@ function buildOffering(group, { aliases, members, defaultAccountId, weeklyAcc, d
   }
   if (it.amount == null) it.warnings.push('금액 없음');
   else if (it.amount <= 0) it.warnings.push('금액 0');
-  else if (it.amount < 1000) it.warnings.push('금액이 1,000원 미만 — 확인');
+  else if (it.amount < (currencyInfo().code === 'USD' ? 100 : 1000)) it.warnings.push(`금액이 ${money(currencyInfo().code === 'USD' ? 100 : 1000)} 미만 — 확인`);
   if (!it.accountId) it.warnings.push('헌금 종류 없음');
   if (!it.donor && !it.memberId) it.donor = '무명';
   it.memo = memoParts.join(' ');
@@ -272,7 +299,7 @@ export function parseExpenses(text, { accounts, history = [], date, refDate } = 
   for (const seg of splitSegments(text, true)) {
     const { date: d, rest } = extractDate(seg, refDate || date || todayLocal());
     const toks = tokenize(rest).filter((t) => t !== '&');
-    const kinds = toks.map(amountKind);
+    const kinds = toks.map(amountKind).map((k) => (k === 'num' && currencyInfo().code === 'USD' ? 'strong' : k));
     let amtIdx = [];
     // 마지막 금액 덩어리를 금액으로
     for (let i = toks.length - 1; i >= 0; i--) {
@@ -281,7 +308,7 @@ export function parseExpenses(text, { accounts, history = [], date, refDate } = 
       else if (amtIdx.length) break;
     }
     const it = { date: d || date || null, amount: null, memo: '', method: null, accountId: null, confidence: 'low', reason: '', warnings: [] };
-    if (amtIdx.length) it.amount = parseKoreanAmount(amtIdx.map((i) => toks[i]).join(''));
+    if (amtIdx.length) it.amount = parseMoney(amtIdx.map((i) => toks[i]).join(''));
     if (kinds.filter((k, i) => k === 'strong' && !amtIdx.includes(i)).length) it.warnings.push('금액이 여러 개 — 마지막 금액을 사용');
     const memo = [];
     toks.forEach((t, i) => {

@@ -12,10 +12,34 @@ export function uid() {
   return [...b].map((x) => x.toString(16).padStart(2, '0')).join('');
 }
 
-/** 1234567 → "1,234,567" (음수 지원) */
+// ── 통화 (지역 모드에 따라 전환) ──
+// 금액은 항상 '최소 단위 정수'로 저장: 원화=원, 달러=센트(소수점 오차 방지)
+const CURRENCIES = {
+  KRW: { code: 'KRW', minor: 1, decimals: 0, unit: '원', prefix: '' },
+  USD: { code: 'USD', minor: 100, decimals: 2, unit: '', prefix: '$' },
+};
+let CUR = CURRENCIES.KRW;
+export function setCurrency(code) { CUR = CURRENCIES[code] || CURRENCIES.KRW; }
+export function currencyInfo() { return CUR; }
+const comma = (s) => s.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+/** 숫자만: 원화 1234567 → "1,234,567" / 달러(센트) 123456 → "1,234.56" */
 export function won(n) {
   const v = Math.round(Number(n) || 0);
-  return (v < 0 ? '-' : '') + Math.abs(v).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  const a = Math.abs(v);
+  const body = CUR.decimals ? `${comma(String(Math.floor(a / CUR.minor)))}.${String(a % CUR.minor).padStart(CUR.decimals, '0')}` : comma(String(a));
+  return (v < 0 ? '-' : '') + body;
+}
+/** 단위 포함: "1,234원" / "$1,234.56" */
+export function money(n) {
+  const v = Math.round(Number(n) || 0);
+  return (v < 0 ? '-' : '') + CUR.prefix + won(Math.abs(v)) + CUR.unit;
+}
+/** 최소 단위 → 사람이 쓰는 단위(엑셀·입력칸용): 원 그대로 / 센트→달러 */
+export function major(n) { return CUR.minor === 1 ? n : Math.round(n) / CUR.minor; }
+/** 입력칸에 다시 채울 문자열 */
+export function inputAmt(n) {
+  if (n == null || n === '' || Number.isNaN(+n)) return '';
+  return CUR.minor === 1 ? String(n) : (Math.round(n) / CUR.minor).toFixed(2).replace(/\.00$/, '');
 }
 
 // ── 날짜 (모두 'YYYY-MM-DD' 문자열, 로컬 타임존 무관하게 UTC 정오 기준 계산) ──

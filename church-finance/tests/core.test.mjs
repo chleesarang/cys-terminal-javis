@@ -18,10 +18,10 @@ import { makeZip, makeXlsx, toCsv, crc32 } from '../core/zip.js';
 import { koreanAmountText, financeReportHtml, voucherHtml, receiptHtml } from '../core/render.js';
 
 const sampleDoc = () => {
-  const d = createDoc({ churchName: '새빛교회' });
-  upsertMember(d, { no: 1, name: '김철수', weekly: 20000, rrn: '9001011234567', address: '서울' });
-  upsertMember(d, { no: 2, name: '이영희', weekly: 15000 });
-  upsertMember(d, { no: 3, name: '박민수', weekly: 10000 });
+  const d = createDoc({ churchName: '가나안예시교회' });
+  upsertMember(d, { no: 1, name: '홍길동', weekly: 20000, rrn: '9001011234567', address: '서울' });
+  upsertMember(d, { no: 2, name: '성춘향', weekly: 15000 });
+  upsertMember(d, { no: 3, name: '이몽룡', weekly: 10000 });
   return d;
 };
 
@@ -48,23 +48,23 @@ test('한국어 금액 해석', () => {
 test('헌금 문장 파싱: 여러 건·교인번호·주정 자동·부부·붙여쓰기', () => {
   const d = sampleDoc();
   const P = (t, def = '101') => parseOfferings(t, { accounts: d.accounts, members: d.members, defaultAccountId: def });
-  let r = P('십일조 김철수 10만원, 감사 이영희 5만');
-  assert.deepEqual(r.map((x) => [x.accountId, x.donor, x.amount]), [['102', '김철수', 100000], ['103', '이영희', 50000]]);
-  r = P('십일조 김철수 10만 원 감사헌금 이영희 5만 원 선교 박민수 3만 원');
+  let r = P('십일조 홍길동 10만원, 감사 성춘향 5만');
+  assert.deepEqual(r.map((x) => [x.accountId, x.donor, x.amount]), [['102', '홍길동', 100000], ['103', '성춘향', 50000]]);
+  r = P('십일조 홍길동 10만 원 감사헌금 성춘향 5만 원 선교 이몽룡 3만 원');
   assert.equal(r.length, 3); assert.equal(r[2].accountId, '104'); assert.equal(r[2].amount, 30000);
   r = P('1\n2\n3');
   assert.deepEqual(r.map((x) => x.amount), [20000, 15000, 10000]);
   assert.ok(r.every((x) => x.auto === '주정'));
-  r = P('김철수 이영희 부부 감사 10만원');
-  assert.equal(r[0].donor2, '이영희'); assert.equal(r[0].warnings.length, 0);
-  r = P('김철수십일조 100,000');
+  r = P('홍길동 성춘향 부부 감사 10만원');
+  assert.equal(r[0].donor2, '성춘향'); assert.equal(r[0].warnings.length, 0);
+  r = P('홍길동십일조 100,000');
   assert.equal(r[0].accountId, '102'); assert.equal(r[0].memberId, d.members[0].id);
-  r = P('김철수 집사 십일조 이십만원 계좌이체');
+  r = P('홍길동 집사 십일조 이십만원 계좌이체');
   assert.equal(r.length, 1); assert.equal(r[0].method, '계좌'); assert.equal(r[0].amount, 200000);
   r = P('12 십일조 10만');
   assert.ok(r[0].warnings.some((w) => w.includes('교인번호 12')));
   r = P('2번 감사 3만원');
-  assert.equal(r[0].donor, '이영희');
+  assert.equal(r[0].donor, '성춘향');
   r = P('무명 주일헌금 32만 4천원');
   assert.equal(r[0].donor, '무명'); assert.equal(r[0].amount, 324000);
 });
@@ -80,13 +80,13 @@ test('지출 파싱·자동분류(키워드+과거 학습)', () => {
 });
 
 test('표 붙여넣기(엑셀 탭·CSV 따옴표)', () => {
-  assert.deepEqual(parseTable('1\t김철수\t20000\n2\t이영희\t15000'), [['1', '김철수', '20000'], ['2', '이영희', '15000']]);
+  assert.deepEqual(parseTable('1\t홍길동\t20000\n2\t성춘향\t15000'), [['1', '홍길동', '20000'], ['2', '성춘향', '15000']]);
   assert.deepEqual(parseTable('"a,b",c\n"x ""y""",z'), [['a,b', 'c'], ['x "y"', 'z']]);
 });
 
 test('장부: 추가·수정·삭제·마감·감사로그 체인/변조 탐지', () => {
   const d = sampleDoc();
-  const t = addTx(d, { date: '2026-10-04', kind: 'in', accountId: '102', amount: 100000, memberId: d.members[0].id, donor: '김철수' });
+  const t = addTx(d, { date: '2026-10-04', kind: 'in', accountId: '102', amount: 100000, memberId: d.members[0].id, donor: '홍길동' });
   assert.throws(() => addTx(d, { date: '2026-10-04', kind: 'in', accountId: '201', amount: 1 }), /불일치/);
   assert.throws(() => addTx(d, { date: '2026-13-04', kind: 'in', accountId: '102', amount: 1 }), /날짜/);
   updateTx(d, t.id, { amount: 110000 });
@@ -118,8 +118,8 @@ test('결산: 이월 자동·특별회계 분리·예산 대비·감사 점검',
   const d = sampleDoc();
   setOpening(d, 2025, '일반회계', 1000000);
   addTx(d, { date: '2025-12-28', kind: 'in', accountId: '101', amount: 500000 });
-  addTx(d, { date: '2026-01-04', kind: 'in', accountId: '102', amount: 300000, memberId: d.members[0].id, donor: '김철수' });
-  addTx(d, { date: '2026-01-04', kind: 'in', accountId: '105', amount: 200000, memberId: d.members[1].id, donor: '이영희' }); // 건축회계
+  addTx(d, { date: '2026-01-04', kind: 'in', accountId: '102', amount: 300000, memberId: d.members[0].id, donor: '홍길동' });
+  addTx(d, { date: '2026-01-04', kind: 'in', accountId: '105', amount: 200000, memberId: d.members[1].id, donor: '성춘향' }); // 건축회계
   addTx(d, { date: '2026-01-05', kind: 'out', accountId: '251', amount: 120000, memo: '전기요금' });
   addTx(d, { date: '2026-01-05', kind: 'out', accountId: '251', amount: 120000, memo: '전기요금' }); // 중복 의심
   setBudget(d, 2026, { 251: 1200000, 102: 3000000 }, { status: '확정' });
@@ -153,11 +153,11 @@ test('헌금 계수 불일치 탐지', () => {
 test('개인별 헌금 합계·기부금영수증 일련번호(중복 없음·재발급 무효화)', () => {
   const d = sampleDoc();
   const kim = d.members[0];
-  addTx(d, { date: '2026-01-04', kind: 'in', accountId: '102', amount: 100000, memberId: kim.id, donor: '김철수' });
-  addTx(d, { date: '2026-02-01', kind: 'in', accountId: '103', amount: 50000, memberId: kim.id, donor: '김철수' });
+  addTx(d, { date: '2026-01-04', kind: 'in', accountId: '102', amount: 100000, memberId: kim.id, donor: '홍길동' });
+  addTx(d, { date: '2026-02-01', kind: 'in', accountId: '103', amount: 50000, memberId: kim.id, donor: '홍길동' });
   addTx(d, { date: '2026-02-01', kind: 'in', accountId: '151', amount: 3000 }); // 이자: 영수증 대상 아님
   addTx(d, { date: '2026-02-01', kind: 'in', accountId: '101', amount: 7000, donor: '무명' });
-  addTx(d, { date: '2025-12-28', kind: 'in', accountId: '102', amount: 999999, memberId: kim.id, donor: '김철수' }); // 다른 연도
+  addTx(d, { date: '2025-12-28', kind: 'in', accountId: '102', amount: 999999, memberId: kim.id, donor: '홍길동' }); // 다른 연도
   const t = donorTotals(d, 2026);
   assert.equal(t.length, 1); assert.equal(t[0].total, 150000);
   const r1 = issueReceipt(d, 2026, t[0].key);
@@ -172,9 +172,9 @@ test('AI 브릿지: 파이프 형식 해석·합계 검산·로컬 분류 보완
   const d = sampleDoc();
   const p = setupPrompt(d);
   assert.ok(p.includes('102십일조') && p.includes('O|YYYYMMDD'));
-  const r = parseBridge('```\nI|20261108|102|김철수|100000\nI|20261108|103|#2&박민수|50000\nO|20261107|?|23000|이마트 커피 다과\nT|173000\n```', d);
+  const r = parseBridge('```\nI|20261108|102|홍길동|100000\nI|20261108|103|#2&이몽룡|50000\nO|20261107|?|23000|이마트 커피 다과\nT|173000\n```', d);
   assert.equal(r.offerings.length, 2); assert.equal(r.expenses.length, 1);
-  assert.equal(r.offerings[1].donor, '이영희'); assert.equal(r.offerings[1].donor2, '박민수');
+  assert.equal(r.offerings[1].donor, '성춘향'); assert.equal(r.offerings[1].donor2, '이몽룡');
   assert.equal(r.expenses[0].accountId, '262');
   assert.equal(r.totalOk, true);
   const bad = parseBridge('O|20261107|251|10000|전기\nT|20000', d);
@@ -238,4 +238,74 @@ test('한글 금액·지출결의서', () => {
   const d = sampleDoc();
   const t = addTx(d, { date: '2026-11-08', kind: 'out', accountId: '262', amount: 23000, memo: '커피' });
   assert.ok(voucherHtml(d, t).includes('일금 이만삼천원정'));
+});
+
+// ── 지역 모드: 미국 이민교회 (달러·센트, IRS Contribution Statement) ──
+import { setRegion } from '../core/region.js';
+import { money, won as wonFmt, inputAmt } from '../core/util.js';
+import { parseMoney } from '../core/parse.js';
+import { usdWords, usStatementHtml } from '../core/render.js';
+import { mdToHtml } from '../core/md.js';
+
+test('미국 모드: 달러 금액 해석·표시(센트 정수 저장)', () => {
+  setRegion('US');
+  try {
+    const cases = { '$23.50': 2350, '23.5': 2350, '100불': 10000, '100 달러': 10000, '1,234.56': 123456, '삼백 달러': 30000, '$1,000': 100000 };
+    for (const [k, v] of Object.entries(cases)) assert.equal(parseMoney(k), v, k);
+    assert.equal(money(123456), '$1,234.56');
+    assert.equal(money(-8340), '-$83.40');
+    assert.equal(wonFmt(5), '0.05');
+    assert.equal(inputAmt(2350), '23.50');
+    assert.equal(inputAmt(10000), '100');
+  } finally { setRegion('KR'); }
+});
+
+test('미국 모드: 헌금 문장(맨 앞 숫자=교인번호, 그 외=달러)·수표', () => {
+  const d = sampleDoc();
+  d.settings.region = 'US';
+  setRegion('US');
+  try {
+    const P = (t) => parseOfferings(t, { accounts: d.accounts, members: d.members, defaultAccountId: '101' });
+    let r = P('1 십일조 150');
+    assert.equal(r[0].memberId, d.members[0].id); assert.equal(r[0].amount, 15000); assert.equal(r[0].accountId, '102');
+    r = P('#2 감사 $50.25 수표');
+    assert.equal(r[0].donor, '성춘향'); assert.equal(r[0].amount, 5025); assert.equal(r[0].method, '수표');
+    r = P('홍길동 감사 100불, 이몽룡 선교 75 zelle');
+    assert.deepEqual(r.map((x) => [x.donor, x.amount, x.method]), [['홍길동', 10000, null], ['이몽룡', 7500, '계좌']]);
+    r = P('3'); // 주정 자동: 이몽룡 weekly(10000 → 이 테스트에서는 $100.00로 해석)
+    assert.equal(r[0].auto, '주정'); assert.equal(r[0].amount, 10000);
+    const e = parseExpenses('Costco 간식 123.45 카드\nHome Depot 페인트 $89', { accounts: d.accounts });
+    assert.deepEqual(e.map((x) => [x.amount, x.accountId]), [[12345, '262'], [8900, '252']]);
+  } finally { setRegion('KR'); }
+});
+
+test('미국 모드: Contribution Statement 필수 문구·SSN 없음·헌금별 내역', () => {
+  const d = sampleDoc();
+  d.settings.region = 'US';
+  d.settings.address = '123 Main St, Los Angeles, CA';
+  setRegion('US');
+  try {
+    const hong = d.members[0];
+    addTx(d, { date: '2026-03-01', kind: 'in', accountId: '102', amount: 30000, memberId: hong.id, donor: '홍길동', method: '수표' });
+    addTx(d, { date: '2026-04-05', kind: 'in', accountId: '103', amount: 2550, memberId: hong.id, donor: '홍길동', donor2: '성춘향' });
+    const t = donorTotals(d, 2026)[0];
+    const r = issueReceipt(d, 2026, t.key);
+    const html = usStatementHtml(d, r, hong);
+    assert.ok(html.includes('No goods or services were provided in exchange for these contributions other than intangible religious benefits'));
+    assert.ok(html.includes('$300.00') && html.includes('$25.50') && html.includes('$325.50'));
+    assert.ok(html.includes('2026/03/01') && html.includes('&amp; 성춘향'));
+    assert.ok(!/SSN|주민등록|9001011234567/.test(html));
+    assert.equal(usdWords(123456), 'One Thousand Two Hundred Thirty-Four and 56/100 Dollars');
+    assert.equal(usdWords(1500), 'Fifteen and 00/100 Dollars');
+    assert.ok(setupPrompt(d).includes('센트는 소수점 2자리'));
+    const br = parseBridge('O|20261107|262|23.50|Costco\nT|23.50', d);
+    assert.equal(br.expenses[0].amount, 2350); assert.equal(br.totalOk, true);
+  } finally { setRegion('KR'); }
+});
+
+test('도움말 마크다운: HTML 주입 차단·링크·표', () => {
+  const html = mdToHtml('# 제목\n<script>alert(1)</script>\n\n| a | b |\n|---|---|\n| 1 | **굵게** |\n\n- [ ] 할 일\n\n[다음](02-쉬운사용설명서.md) [IRS](https://www.irs.gov/x)', 'docs/');
+  assert.ok(!html.includes('<script>') && html.includes('&lt;script&gt;'));
+  assert.ok(html.includes('<table') && html.includes('<b>굵게</b>'));
+  assert.ok(html.includes('data-doc="02-쉬운사용설명서"') && html.includes('rel="noopener noreferrer"'));
 });

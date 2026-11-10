@@ -6,13 +6,15 @@ import { getMeta, putMeta, loadDoc, saveDoc, putFile, persist } from './store.js
 import { b64decode } from './core/util.js';
 import * as IN from './views-input.js';
 import * as MG from './views-manage.js';
+import * as HP from './views-help.js';
 import { APP } from './config.js';
+import { setRegion, REGIONS, regionOf } from './core/region.js';
 
-const VIEWS = { ...IN.views, ...MG.views };
-const ACT = { ...IN.actions, ...MG.actions };
+const VIEWS = { ...IN.views, ...MG.views, ...HP.views };
+const ACT = { ...IN.actions, ...MG.actions, ...HP.actions };
 const NAV = [
   ['home', '🏠', '홈'], ['offer', '🙏', '헌금'], ['expense', '🧾', '지출'], ['ledger', '📒', '장부'], ['report', '📊', '보고서'],
-  ['members', '👥', '교인'], ['receipts', '📄', '영수증'], ['budget', '📐', '예산'], ['ai', '🤖', 'AI 도우미'], ['settings', '⚙️', '설정'],
+  ['members', '👥', '교인'], ['receipts', '📄', '영수증'], ['help', '📘', '도움말'], ['budget', '📐', '예산'], ['ai', '🤖', 'AI 도우미'], ['settings', '⚙️', '설정'],
 ];
 const BOTTOM = ['home', 'offer', 'expense', 'report', 'more'];
 
@@ -24,7 +26,7 @@ function render() {
   const view = VIEWS[S.view] || VIEWS.home;
   let body;
   try { body = view(); } catch (e) { console.error(e); body = h`<div class="card bad">화면 오류: ${e.message}</div>`; }
-  root.innerHTML = h`<header class="topbar"><div class="brand"><img src="icons/icon-192.png" alt=""><span>${APP.name}</span></div><span class="church">${S.doc.settings.churchName}</span><span class="sp"></span><button data-act="lockNow" title="잠그기">🔒 잠금</button></header>
+  root.innerHTML = h`<header class="topbar"><div class="brand"><img src="icons/icon-192.png" alt=""><span>${APP.name} <small>V${APP.version}</small></span></div><span class="church">${S.doc.settings.churchName}</span><span class="sp"></span><button data-act="lockNow" title="잠그기">🔒 잠금</button></header>
   <div class="shell"><nav class="side" aria-label="메뉴">${NAV.map(([k, i, l]) => h`<button data-act="nav" data-v="${k}" ${S.view === k ? 'aria-current="page"' : ''}><span>${i}</span>${l}</button>`)}</nav>
   <main id="main">${body}</main></div>
   <nav class="bottomnav" aria-label="빠른 메뉴">${BOTTOM.map((k) => { const n = NAV.find((x) => x[0] === k) || ['more', '☰', '더보기']; return h`<button data-act="nav" data-v="${n[0]}" ${S.view === k || (k === 'more' && !BOTTOM.includes(S.view)) ? 'aria-current="page"' : ''}><span class="i">${n[1]}</span>${n[2]}</button>`; })}</nav>`.s;
@@ -47,13 +49,14 @@ function renderSetup(step = 1, data = {}) {
   if (step === 1) {
     root.innerHTML = h`<div class="gate"><div class="logo"><img src="icons/icon-192.png" alt=""><h1>${APP.name}</h1><p class="muted">${APP.tagline}</p></div>
     <div class="card"><h3>처음 설정</h3>
-      <label class="f"><span>교회 이름</span><input type="text" id="su-name" autocomplete="organization"></label>
+      <label class="f"><span>교회(기관) 이름</span><input type="text" id="su-name" autocomplete="organization"></label>
+      <label class="f"><span>지역 · 영수증 방식 (첫 입력 후에는 바꿀 수 없음)</span><select id="su-region">${Object.values(REGIONS).map((r) => h`<option value="${r.code}">${r.label}</option>`)}</select></label>
       <label class="f"><span>회계연도 시작</span><select id="su-fy">${Array.from({ length: 12 }, (_, i) => i + 1).map((m) => h`<option value="${m}" ${m === 1 ? 'selected' : ''}>${m}월</option>`)}</select></label>
       <label class="f"><span>비밀번호 (8자 이상 · 이 기기의 장부를 여는 열쇠)</span><input type="password" id="su-pw" autocomplete="new-password"></label>
       <label class="f"><span>비밀번호 확인</span><input type="password" id="su-pw2" autocomplete="new-password"></label>
       <div class="row" style="margin-top:12px"><button class="btn primary grow" data-gate="setupNext">다음 ▶</button></div>
     </div>
-    <div class="card"><h3>이미 쓰던 장부가 있나요?</h3><p class="small muted">다른 기기(PC·휴대폰)에서 만든 백업 파일로 시작합니다.</p><label class="btn">📂 백업 파일로 시작<input type="file" accept=".cjbak,application/json" class="hidden" id="su-restore"></label></div>
+    <div class="card"><h3>이미 쓰던 장부가 있나요?</h3><p class="small muted">다른 기기(PC·휴대폰)에서 만든 백업 파일로 시작합니다.</p><label class="btn">📂 백업 파일로 시작<input type="file" accept=".boaz,application/json" class="hidden" id="su-restore"></label></div>
     <p class="small muted">🔒 모든 자료는 이 기기 안에만 암호화되어 저장됩니다. 서버·회원가입·인터넷이 필요 없고, 배포사도 교회 자료를 볼 수 없습니다.</p></div>`.s;
     $('#su-restore').addEventListener('change', (e) => run(() => restoreFresh(e.target.files[0])));
     return;
@@ -72,7 +75,7 @@ async function setupNext() {
   const bad = checkPassword(pw);
   if (bad) return toast(bad, true);
   if (pw !== pw2) return toast('비밀번호 확인이 다릅니다', true);
-  S._setup = { name, pw, fy: +$('#su-fy').value, rc: genRecoveryCode() };
+  S._setup = { name, pw, fy: +$('#su-fy').value, region: $('#su-region').value, rc: genRecoveryCode() };
   renderSetup(2, S._setup);
 }
 async function setupDone() {
@@ -80,7 +83,7 @@ async function setupDone() {
   const s = S._setup;
   toast('암호 열쇠를 만드는 중…');
   const { keyring, key } = await createKeyring(s.pw, s.rc);
-  const doc = createDoc({ churchName: s.name, fyStartMonth: s.fy });
+  const doc = createDoc({ churchName: s.name, fyStartMonth: s.fy, region: s.region });
   appendAudit(doc, 'init', '', `장부 생성: ${s.name}`);
   await putMeta('keyring', keyring);
   await saveDoc(key, doc);
@@ -143,6 +146,7 @@ function lockNow(msg) {
 }
 
 function startSession() {
+  setRegion(S.doc.settings.region || 'KR');
   const t = $('#toast'); if (t) t.hidden = true;
   document.documentElement.dataset.size = S.doc.settings.fontSize || '';
   S.lastActive = Date.now();

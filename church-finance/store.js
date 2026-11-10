@@ -3,7 +3,7 @@
 //   files: 영수증·사진·영상 (각각 AES-GCM 암호화)
 import { encryptJson, decryptJson, encryptBytes, decryptBytes } from './core/crypto.js';
 
-const DB = 'cheongjigi-ledger';
+const DB = 'boaz-ledger';
 let dbp = null;
 function db() {
   if (!dbp) dbp = new Promise((res, rej) => {

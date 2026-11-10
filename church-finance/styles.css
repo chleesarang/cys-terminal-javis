@@ -146,6 +146,8 @@ dialog img.full { max-width: 100%; }
 .doc .voucher-img img { max-width: 100%; max-height: 520px; margin-top: 8px; border: 1px solid #ccc; }
 .doc.receipt .r-top { display: flex; justify-content: space-between; font-size: 12px; }
 .doc.receipt .r-title { text-align: center; letter-spacing: .4em; }
+.doc.receipt .r-title.us { letter-spacing: .04em; margin-bottom: 0; }
+.doc.receipt .r-sub { text-align: center; margin: 0 0 10px; }
 .doc.receipt .r-law, .doc.receipt .r-date, .doc.receipt .r-sign { text-align: center; margin: 10px 0; }
 .page-break { break-after: page; height: 18px; }
 .preview-doc { overflow-x: auto; }
@@ -159,3 +161,20 @@ dialog img.full { max-width: 100%; }
   .no-print { display: none !important; }
   .doc table.t tr { break-inside: avoid; }
 }
+
+/* 도움말 문서 */
+.btn-card { display: flex; flex-direction: column; gap: 4px; text-align: left; cursor: pointer; font: inherit; color: var(--ink); }
+.btn-card:hover { border-color: var(--gold); }
+.md-body { line-height: 1.75; }
+.md-body h1 { font-size: 1.45em; margin: .2em 0 .6em; }
+.md-body h2 { font-size: 1.2em; margin: 1.4em 0 .5em; padding-bottom: 4px; border-bottom: 2px solid var(--line); }
+.md-body h3 { font-size: 1.05em; margin: 1.1em 0 .4em; }
+.md-body img { max-width: 100%; border: 1px solid var(--line); border-radius: 10px; margin: 6px 0; }
+.md-body blockquote { margin: 10px 0; padding: 10px 14px; background: var(--gold-soft); border-left: 4px solid var(--gold); border-radius: 8px; }
+.md-body code { background: var(--bg); border: 1px solid var(--line); border-radius: 5px; padding: 0 5px; font-size: .92em; }
+.md-body pre { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px; overflow-x: auto; }
+.md-body pre code { border: 0; padding: 0; }
+.md-body li.chk { list-style: none; margin-left: -1.2em; }
+.topbar small { opacity: .75; font-weight: 600; }
+.doc.md-body { font-size: 12pt; }
+.doc.md-body img { max-height: 420px; }

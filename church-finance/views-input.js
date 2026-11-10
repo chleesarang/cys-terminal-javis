@@ -1,8 +1,9 @@
 // 입력 화면 — 홈 · 헌금 · 지출 · 장부
 import { S, h, raw, $, $$, toast, modal, askReason, commit, compressImage, storeAttachment, thumbs, hydrateThumbs, printHtml, today, fileUrl } from './ui.js';
-import { won, fmtDate, lastSunday, addDays, esc } from './core/util.js';
-import { parseOfferings, parseExpenses, parseKoreanAmount, classifyExpense } from './core/parse.js';
-import { addTx, updateTx, deleteTx, isLocked, lockedThrough, liveTxs, METHODS, upsertBatch, cashTotal, BILLS, fyOf, fyRange } from './core/ledger.js';
+import { won, money, inputAmt, fmtDate, lastSunday, addDays, esc } from './core/util.js';
+import { regionOf } from './core/region.js';
+import { parseOfferings, parseExpenses, parseMoney, classifyExpense } from './core/parse.js';
+import { addTx, updateTx, deleteTx, isLocked, lockedThrough, liveTxs, METHODS, upsertBatch, cashTotal, fyOf, fyRange } from './core/ledger.js';
 import { summarize, periodRange } from './core/reports.js';
 import { voucherHtml, countSheetHtml } from './core/render.js';
 import { accountLabel } from './core/accounts.js';
@@ -22,9 +23,9 @@ export function accOptions(kind, sel, { blank = false } = {}) {
   for (const a of list) (groups[a.gwan] ||= []).push(a);
   return h`${blank ? h`<option value="" ${!sel ? 'selected' : ''}>— 미분류 —</option>` : ''}${Object.entries(groups).map(([g, l]) => h`<optgroup label="${g}">${l.map((a) => h`<option value="${a.id}" ${a.id === sel ? 'selected' : ''}>${a.name}${a.fund !== '일반회계' ? ' [' + a.fund + ']' : ''}</option>`)}</optgroup>`)}`;
 }
-export const methodOptions = (sel) => h`${METHODS.map((m) => h`<option ${m === sel ? 'selected' : ''}>${m}</option>`)}`;
+export const methodOptions = (sel) => h`${METHODS.map((m) => h`<option value="${m}" ${m === sel ? 'selected' : ''}>${regionOf(S.doc).methodLabels[m] || m}</option>`)}`;
 export const membersDatalist = () => h`<datalist id="members-dl">${S.doc.members.filter((m) => m.status !== '중지').map((m) => h`<option value="${m.name} #${m.no}"></option>`)}</datalist>`;
-/** "김철수 #12" / "#12" / "12" / "김철수" → {memberId, donor} */
+/** "홍길동 #12" / "#12" / "12" / "홍길동" → {memberId, donor} */
 export function resolveDonor(text) {
   const t = String(text || '').trim();
   if (!t) return { memberId: null, donor: '무명' };
@@ -63,9 +64,9 @@ export function vHome() {
   if (!d.members.length) rem.push(h`<b>교인 명부</b>를 등록하면 번호만으로 이름 오타 없이 입력되고 주정헌금이 자동으로 채워집니다. <a href="#" data-act="nav" data-v="members">교인 명부</a>`);
   return h`<h2 class="page">${d.settings.churchName} 재정 현황</h2>
   <div class="grid">
-    <div class="stat hl"><div class="k">이번 주 헌금</div><div class="v">${won(sw.totals.in)}원</div><div class="s">${fmtDate(w.from)} ~ · ${sw.txs.filter((x) => x.kind === 'in').length}건</div></div>
-    <div class="stat"><div class="k">${+m.from.slice(5, 7)}월 수입</div><div class="v">${won(sm.totals.in)}원</div><div class="s">지출 ${won(sm.totals.out)}원</div></div>
-    ${Object.entries(sy.byFund).filter(([f, v]) => f === '일반회계' || v.closing || v.in).map(([f, v]) => h`<div class="stat"><div class="k">${f} 잔액</div><div class="v ${v.closing < 0 ? 'bad' : ''}">${won(v.closing)}원</div><div class="s">${fy}년도 이월 ${won(v.opening)}원 포함</div></div>`)}
+    <div class="stat hl"><div class="k">이번 주 헌금</div><div class="v">${money(sw.totals.in)}</div><div class="s">${fmtDate(w.from)} ~ · ${sw.txs.filter((x) => x.kind === 'in').length}건</div></div>
+    <div class="stat"><div class="k">${+m.from.slice(5, 7)}월 수입</div><div class="v">${money(sm.totals.in)}</div><div class="s">지출 ${money(sm.totals.out)}</div></div>
+    ${Object.entries(sy.byFund).filter(([f, v]) => f === '일반회계' || v.closing || v.in).map(([f, v]) => h`<div class="stat"><div class="k">${f} 잔액</div><div class="v ${v.closing < 0 ? 'bad' : ''}">${money(v.closing)}</div><div class="s">${fy}년도 이월 ${money(v.opening)} 포함</div></div>`)}
     <div class="stat"><div class="k">감사 점검(이번 달)</div><div class="v ${sm.flags.some((f) => f.level === 'warn') ? 'warn' : 'ok'}">${sm.flags.length}건</div><div class="s"><a href="#" data-act="nav" data-v="report">보고서에서 보기</a></div></div>
   </div>
   <div class="row" style="margin:14px 0">
@@ -115,13 +116,13 @@ export function vOffer() {
       return h`<div class="chips">${top.map((a) => h`<button class="chip" aria-pressed="${a.id === o.acc}" data-act="ofAcc" data-id="${a.id}">${a.name}</button>`)}${rest.length ? h`<select class="chip" data-change="ofAccSel" aria-label="다른 헌금 종류"><option value="">다른 종류…</option>${rest.map((a) => h`<option value="${a.id}">${a.name}</option>`)}</select>` : ''}</div>`;
     })()}
     <label class="f" style="margin-top:12px"><span>한 줄에 한 건 — 타이핑·받아쓰기·붙여넣기 모두 가능</span>
-    <textarea id="of-text" placeholder="12 십일조 10만&#10;김철수 감사 5만원&#10;3   ← 주일헌금: 번호만 쓰면 주정 금액 자동&#10;김철수 이영희 부부 감사 10만&#10;무명 32만 4천원">${o.text}</textarea></label>
+    <textarea id="of-text" placeholder="${regionOf(S.doc).offerExample}">${o.text}</textarea></label>
     <div class="row" style="margin-top:8px">
       <button class="btn primary" data-act="ofParse">미리보기 ▶</button>
       ${micOk ? h`<button class="btn" data-act="dictate" data-target="of-text">🎤 말하기</button>` : ''}
       <button class="btn sm" data-act="ofClear">지우기</button>
     </div>
-    <p class="hint" style="margin-top:10px">📱 <b>휴대폰</b>: 입력칸을 누르고 키보드의 🎤(마이크)를 눌러 “십일조 김철수 십만 원”처럼 말하세요(삼성 키보드는 한국어를 기기 안에서 처리).<br>🎙 <b>녹음해 둔 파일</b>: 갤럭시 ‘음성 녹음 → 텍스트 변환’, 아이폰 ‘음성 메모 → 전사’로 글로 바꿔 복사해 붙여넣으면 됩니다(AI 비용 0).<br>🔢 교인 명부가 있으면 <b>번호</b>만 써도 이름 오타가 없습니다.</p>
+    <p class="hint" style="margin-top:10px">📱 <b>휴대폰</b>: 입력칸을 누르고 키보드의 🎤(마이크)를 눌러 “십일조 홍길동 십만 원”처럼 말하세요(삼성 키보드는 한국어를 기기 안에서 처리).<br>🎙 <b>녹음해 둔 파일</b>: 갤럭시 ‘음성 녹음 → 텍스트 변환’, 아이폰 ‘음성 메모 → 전사’로 글로 바꿔 복사해 붙여넣으면 됩니다(AI 비용 0).<br>🔢 교인 명부가 있으면 <b>번호</b>만 써도 이름 오타가 없습니다.</p>
   </div>
   ${o.items.length ? h`<div class="card"><h3>미리보기 — 확인 후 저장</h3>${membersDatalist()}
     <div class="tbl-wrap"><table class="list"><thead><tr><th>종류</th><th>헌금자 (이름 또는 #번호)</th><th>성명2(부부)</th><th class="n">금액</th><th>방법</th><th></th></tr></thead><tbody>
@@ -129,21 +130,21 @@ export function vOffer() {
       <td><select data-f="accountId">${accOptions('in', it.accountId)}</select></td>
       <td><input type="text" data-f="donor" list="members-dl" value="${it.memberId ? donorLabel(it) : it.donor}">${it.auto ? h`<div class="small muted">주정 자동</div>` : ''}${it.warnings.length ? h`<div class="small warn">⚠ ${it.warnings.join(' · ')}</div>` : ''}</td>
       <td><input type="text" data-f="donor2" list="members-dl" value="${it.memberId2 ? donorLabel({ memberId: it.memberId2 }) : it.donor2}"></td>
-      <td><input type="text" inputmode="numeric" data-f="amount" value="${it.amount ?? ''}" class="n"></td>
+      <td><input type="text" inputmode="decimal" data-f="amount" value="${inputAmt(it.amount)}" class="n"></td>
       <td><select data-f="method">${methodOptions(it.method || '현금')}</select></td>
       <td><button class="btn sm danger" data-act="ofDel" data-i="${i}" aria-label="빼기">✕</button></td></tr>`)}
     </tbody><tfoot><tr><td colspan="3">합계 ${o.items.length}건</td><td class="n">${won(o.items.reduce((s, x) => s + (x.amount || 0), 0))}</td><td colspan="2"></td></tr></tfoot></table></div>
     <div class="row" style="margin-top:10px"><button class="btn gold" data-act="ofSave">✔ ${o.items.length}건 저장</button><span class="small muted">금액은 “10만”처럼 써도 됩니다</span></div></div>` : ''}
-  <div class="card"><h3>${fmtDate(o.date)} 헌금 기록 · ${day.length}건 · ${won(day.reduce((s, t) => s + t.amount, 0))}원</h3>
+  <div class="card"><h3>${fmtDate(o.date)} 헌금 기록 · ${day.length}건 · ${money(day.reduce((s, t) => s + t.amount, 0))}</h3>
     ${Object.keys(byType).length ? h`<p class="small">${Object.entries(byType).map(([k, v]) => h`<span class="badge">${k} ${won(v)}</span> `)}</p>` : ''}
     ${day.length ? txTable(day) : h`<p class="muted">이 날짜의 헌금이 없습니다.</p>`}
   </div>
   <details class="card" ${S.ui.countOpen ? 'open' : ''}><summary>💵 현금 계수표 (2인 확인) — 장부와 자동 대조</summary>
     <div class="tbl-wrap"><table class="list"><thead><tr><th>권종</th><th>매수</th><th class="n">금액</th></tr></thead><tbody>
-    ${BILLS.map((b) => h`<tr><td>${won(b)}원</td><td><input type="number" min="0" inputmode="numeric" data-bill="${b}" value="${batch.cash?.[b] || ''}" data-live="countSum"></td><td class="n" data-billsum="${b}">${won(b * (batch.cash?.[b] || 0))}</td></tr>`)}
-    </tbody><tfoot><tr><td>현금 합계</td><td></td><td class="n" id="cnt-total">${won(cashTotal(batch.cash))}</td></tr></tfoot></table></div>
+    ${regionOf(S.doc).bills.map(([b, label]) => h`<tr><td>${label}</td><td><input type="number" min="0" inputmode="numeric" data-bill="${b}" value="${batch.cash?.[b] || ''}" data-live="countSum"></td><td class="n" data-billsum="${b}">${won(b * (batch.cash?.[b] || 0))}</td></tr>`)}
+    </tbody><tfoot><tr><td>현금 합계</td><td></td><td class="n" id="cnt-total">${money(cashTotal(batch.cash))}</td></tr></tfoot></table></div>
     <div class="row"><label class="f grow"><span>계수자 1</span><input type="text" id="cnt-a" value="${batch.counters?.[0] || ''}"></label><label class="f grow"><span>계수자 2</span><input type="text" id="cnt-b" value="${batch.counters?.[1] || ''}"></label></div>
-    <p id="cnt-cmp" class="${cashTotal(batch.cash) === cashBook ? 'ok' : 'warn'}">장부의 현금 헌금 ${won(cashBook)}원 — ${cashTotal(batch.cash) === cashBook ? '일치' : '차이 ' + won(cashTotal(batch.cash) - cashBook) + '원'}</p>
+    <p id="cnt-cmp" class="${cashTotal(batch.cash) === cashBook ? 'ok' : 'warn'}">장부의 현금 헌금 ${money(cashBook)} — ${cashTotal(batch.cash) === cashBook ? '일치' : '차이 ' + money(cashTotal(batch.cash) - cashBook)}</p>
     <div class="row"><button class="btn primary" data-act="cntSave">계수 저장</button><button class="btn" data-act="cntPrint">🖨 헌금 집계표 2부 인쇄</button></div>
   </details>`;
 }
@@ -163,7 +164,7 @@ export function vExpense() {
   <div class="card">
     <div class="row">
       <label class="f"><span>지출일</span><input type="date" id="ex-date" value="${e.date}"></label>
-      <label class="f grow"><span>금액</span><input type="text" id="ex-amount" inputmode="numeric" placeholder="23000 또는 2만3천" data-live="exAmount" value="${e.amount || ''}"><small id="ex-amount-v" class="muted"></small></label>
+      <label class="f grow"><span>금액</span><input type="text" id="ex-amount" inputmode="decimal" placeholder="${regionOf(S.doc).amountHint}" data-live="exAmount" value="${e.amount || ''}"><small id="ex-amount-v" class="muted"></small></label>
       <label class="f"><span>결제</span><select id="ex-method">${methodOptions(e.method || '카드')}</select></label>
     </div>
     <label class="f" style="margin-top:8px"><span>간단 메모 — 이것만 쓰면 예산 항목이 자동 선택됩니다</span><input type="text" id="ex-memo" placeholder="예: 교회학교 간식 / 봉고차 주유 / 전기요금" data-live="exMemo" value="${e.memo || ''}"></label>
@@ -186,7 +187,7 @@ export function vExpense() {
     <div class="row" style="margin-top:8px"><button class="btn primary" data-act="exParse">미리보기 ▶</button>${SR && !iosStandalone ? h`<button class="btn" data-act="dictate" data-target="ex-text">🎤 말하기</button>` : ''}</div>
     ${e.items.length ? h`<div class="tbl-wrap" style="margin-top:10px"><table class="list"><thead><tr><th>날짜</th><th>내용</th><th>예산 항목</th><th class="n">금액</th><th>결제</th><th></th></tr></thead><tbody>
       ${e.items.map((it, i) => h`<tr class="ex-row ${it.warnings.length ? 'warnrow' : ''}" data-i="${i}"><td><input type="date" data-f="date" value="${it.date || e.date}"></td><td><input type="text" data-f="memo" value="${it.memo}">${it.warnings.length ? h`<div class="small warn">⚠ ${it.warnings.join(' · ')}</div>` : ''}</td>
-      <td><select data-f="accountId">${accOptions('out', it.accountId, { blank: true })}</select><div class="small muted">${it.reason || ''}</div></td><td><input type="text" inputmode="numeric" data-f="amount" value="${it.amount ?? ''}"></td><td><select data-f="method">${methodOptions(it.method || '카드')}</select></td>
+      <td><select data-f="accountId">${accOptions('out', it.accountId, { blank: true })}</select><div class="small muted">${it.reason || ''}</div></td><td><input type="text" inputmode="decimal" data-f="amount" value="${inputAmt(it.amount)}"></td><td><select data-f="method">${methodOptions(it.method || '카드')}</select></td>
       <td><button class="btn sm danger" data-act="exDel" data-i="${i}">✕</button></td></tr>`)}</tbody></table></div>
       <p class="small muted">영수증 사진은 저장 후 <b>장부</b>에서 각 건에 붙일 수 있습니다.</p>
       <button class="btn gold" data-act="exSaveMany">✔ ${e.items.length}건 저장</button>` : ''}
@@ -236,7 +237,7 @@ export function vLedger() {
     <label class="f grow"><span>검색</span><input type="search" id="ld-q" placeholder="이름·메모·금액" value="${L.q}"></label>
     <button class="btn primary" data-act="ldApply">조회</button>
   </div></div>
-  <div class="card"><h3>${list.length}건 · 수입 ${won(sIn)}원 · 지출 ${won(sOut)}원</h3>${list.length ? txTable(list.slice(0, 500)) : h`<p class="muted">조건에 맞는 기록이 없습니다.</p>`}${list.length > 500 ? h`<p class="small muted">앞의 500건만 표시합니다. 기간을 좁히세요.</p>` : ''}</div>`;
+  <div class="card"><h3>${list.length}건 · 수입 ${money(sIn)} · 지출 ${money(sOut)}</h3>${list.length ? txTable(list.slice(0, 500)) : h`<p class="muted">조건에 맞는 기록이 없습니다.</p>`}${list.length > 500 ? h`<p class="small muted">앞의 500건만 표시합니다. 기간을 좁히세요.</p>` : ''}</div>`;
 }
 
 async function editTx(id) {
@@ -247,7 +248,7 @@ async function editTx(id) {
   const body = h`${locked ? h`<p class="hint">🔒 마감된 기간입니다. 수정하면 사유가 감사로그에 남습니다.</p>` : ''}
     <div class="row"><label class="f"><span>날짜</span><input type="date" name="date" value="${t.date}"></label>
     <label class="f grow"><span>항목</span><select name="accountId">${accOptions(t.kind, t.accountId, { blank: t.kind === 'out' })}</select></label>
-    <label class="f"><span>금액</span><input type="text" inputmode="numeric" name="amount" value="${t.amount}"></label></div>
+    <label class="f"><span>금액</span><input type="text" inputmode="decimal" name="amount" value="${inputAmt(t.amount)}"></label></div>
     ${t.kind === 'in' ? h`${membersDatalist()}<div class="row"><label class="f grow"><span>헌금자</span><input type="text" name="donor" list="members-dl" value="${donorLabel(t)}"></label><label class="f grow"><span>성명2(부부)</span><input type="text" name="donor2" list="members-dl" value="${t.memberId2 ? donorLabel({ memberId: t.memberId2 }) : t.donor2 || ''}"></label></div>`
       : h`<div class="row"><label class="f grow"><span>지급처</span><input type="text" name="payee" value="${t.payee || ''}"></label></div>`}
     <div class="row"><label class="f grow"><span>메모</span><input type="text" name="memo" value="${t.memo || ''}"></label><label class="f"><span>방법</span><select name="method">${methodOptions(t.method)}</select></label></div>
@@ -276,7 +277,7 @@ async function editTx(id) {
   }
   if (r.key !== 'save') return;
   const v = r.values;
-  const amount = parseKoreanAmount(v.amount);
+  const amount = parseMoney(v.amount);
   const patch = { date: v.date, accountId: v.accountId || '', amount, memo: v.memo, method: v.method };
   if (t.kind === 'in') { Object.assign(patch, resolveDonor(v.donor)); const d2 = v.donor2 ? resolveDonor(v.donor2) : { memberId: null, donor: '' }; patch.memberId2 = d2.memberId; patch.donor2 = v.donor2 ? d2.donor : ''; }
   else { patch.payee = v.payee; patch.noReceiptReason = v.noReceiptReason; }
@@ -358,8 +359,8 @@ export const actions = {
   },
   countSum() {
     let total = 0;
-    for (const el of $$('[data-bill]')) { const b = +el.dataset.bill, c = parseInt(el.value, 10) || 0; total += b * c; $(`[data-billsum="${b}"]`).textContent = won(b * c); }
-    $('#cnt-total').textContent = won(total);
+    for (const el of $$('[data-bill]')) { const b = +el.dataset.bill, c = parseInt(el.value, 10) || 0; total += b * c; $(`[data-billsum="${b}"]`).textContent = money(b * c); }
+    $('#cnt-total').textContent = money(total);
     S.ui.countOpen = true;
   },
   async cntSave() {
@@ -369,7 +370,7 @@ export const actions = {
     const b = upsertBatch(S.doc, { id: ex?.id, date: o.date, cash, counters: [$('#cnt-a').value, $('#cnt-b').value] });
     await commit(); S.ui.countOpen = true;
     const book = liveTxs(S.doc).filter((t) => t.kind === 'in' && t.date === o.date && t.method === '현금').reduce((s, t) => s + t.amount, 0);
-    toast(b.cashTotal === book ? '계수 저장 — 장부와 일치합니다' : `계수 저장 — 장부와 ${won(b.cashTotal - book)}원 차이`, b.cashTotal !== book);
+    toast(b.cashTotal === book ? '계수 저장 — 장부와 일치합니다' : `계수 저장 — 장부와 ${money(b.cashTotal - book)} 차이`, b.cashTotal !== book);
     S.render();
   },
   cntPrint() {
@@ -378,7 +379,7 @@ export const actions = {
     printHtml(countSheetHtml(S.doc, b, liveTxs(S.doc).filter((t) => t.kind === 'in' && t.date === o.date)));
   },
   dictate,
-  exAmount(el) { const v = parseKoreanAmount(el.value); $('#ex-amount-v').textContent = el.value ? (v ? `= ${won(v)}원` : '금액을 읽을 수 없음') : ''; },
+  exAmount(el) { const v = parseMoney(el.value); $('#ex-amount-v').textContent = el.value ? (v ? `= ${money(v)}` : '금액을 읽을 수 없음') : ''; },
   exMemo() { exSuggest(); },
   exAccManual(el) { expState().accAuto = !el.value; },
   async exFiles(el) {
@@ -396,7 +397,7 @@ export const actions = {
   async exSave() {
     snapshotExpForm();
     const e = expState();
-    const amount = parseKoreanAmount(e.amount);
+    const amount = parseMoney(e.amount);
     if (!amount) return toast('금액을 입력하세요', true);
     if (!e.memo.trim()) return toast('간단 메모를 입력하세요 (예: 교회학교 간식)', true);
     if (!e.files.length && !e.noReason.trim()) {
@@ -412,7 +413,7 @@ export const actions = {
     await commit();
     for (const f of e.files) if (f.url) URL.revokeObjectURL(f.url);
     S.ui.exp = { date: e.date, files: [], text: e.text, items: e.items, acc: '', accAuto: true, method: e.method };
-    toast(`지출 ${won(amount)}원 저장 — ${accName(e.acc)}`);
+    toast(`지출 ${money(amount)} 저장 — ${accName(e.acc)}`);
     S.render();
   },
   exParse() {
@@ -455,7 +456,7 @@ function syncOfferRows() {
     it.accountId = r.accountId;
     const d1 = resolveDonor(r.donor); it.memberId = d1.memberId; it.donor = d1.donor;
     if (r.donor2?.trim()) { const d2 = resolveDonor(r.donor2); it.memberId2 = d2.memberId; it.donor2 = d2.donor; } else { it.memberId2 = null; it.donor2 = ''; }
-    it.amount = parseKoreanAmount(r.amount);
+    it.amount = parseMoney(r.amount);
     it.method = r.method;
   }
 }
@@ -464,7 +465,7 @@ function syncExpRows() {
   for (const r of readRows('tr.ex-row')) {
     const it = e.items[r.i];
     if (!it) continue;
-    Object.assign(it, { date: r.date, memo: r.memo, accountId: r.accountId, amount: parseKoreanAmount(r.amount), method: r.method });
+    Object.assign(it, { date: r.date, memo: r.memo, accountId: r.accountId, amount: parseMoney(r.amount), method: r.method });
   }
 }
 
